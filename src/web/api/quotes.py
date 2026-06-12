@@ -23,11 +23,19 @@ def _parse_market(market: str) -> MarketCode:
         raise HTTPException(400, f"不支持的市场: {market}")
 
 
-def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> dict:
+def _quote_to_response(
+    symbol: str,
+    market: MarketCode,
+    quote: dict | None,
+    *,
+    provider: str = "",
+) -> dict:
     if not quote:
         return {
             "symbol": symbol,
             "market": market.value,
+            "source": provider or None,
+            "data_as_of": None,
             "name": None,
             "current_price": None,
             "change_pct": None,
@@ -47,6 +55,8 @@ def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> d
     return {
         "symbol": symbol,
         "market": market.value,
+        "source": quote.get("source") or provider or None,
+        "data_as_of": quote.get("data_as_of") or quote.get("timestamp") or quote.get("time") or quote.get("date"),
         "name": quote.get("name"),
         "current_price": quote.get("current_price"),
         "change_pct": quote.get("change_pct"),
@@ -78,7 +88,7 @@ async def get_quote(symbol: str, market: str = "CN"):
     quote = quote_map.get(symbol)
     if not quote:
         raise HTTPException(404, "行情不存在")
-    return _quote_to_response(symbol, market_code, quote)
+    return _quote_to_response(symbol, market_code, quote, provider=resp.provider)
 
 
 @router.post("/batch")
@@ -94,19 +104,29 @@ async def get_quotes_batch(payload: QuoteBatchRequest):
 
     orch = get_quote_orchestrator()
     quotes_by_market: dict[MarketCode, dict[str, dict]] = {}
+    providers_by_market: dict[MarketCode, str] = {}
     for market_code, symbols in market_items.items():
         resp = await orch.fetch(
             ProviderRequest(symbols=tuple(symbols), market=market_code.value)
         )
         if resp.success and resp.data:
             quotes_by_market[market_code] = {item.get("symbol"): item for item in resp.data}
+            providers_by_market[market_code] = resp.provider
         else:
             quotes_by_market[market_code] = {}
+            providers_by_market[market_code] = resp.provider
 
     results = []
     for item in payload.items:
         market_code = _parse_market(item.market)
         quote = quotes_by_market.get(market_code, {}).get(item.symbol)
-        results.append(_quote_to_response(item.symbol, market_code, quote))
+        results.append(
+            _quote_to_response(
+                item.symbol,
+                market_code,
+                quote,
+                provider=providers_by_market.get(market_code, ""),
+            )
+        )
 
     return results

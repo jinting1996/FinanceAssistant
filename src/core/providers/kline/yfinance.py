@@ -45,6 +45,12 @@ class YFinanceKlineProvider(KlineProvider):
                     return 60
         return 60
 
+    def _interval(self, req: ProviderRequest) -> str:
+        for k, v in req.extra:
+            if k == "interval":
+                return str(v or "1d").lower()
+        return "1d"
+
     async def fetch(self, req: ProviderRequest) -> ProviderResponse:
         if self._init_error:
             return ProviderResponse(success=False, error=self._init_error)
@@ -57,6 +63,9 @@ class YFinanceKlineProvider(KlineProvider):
             )
         if req.market not in self.supports_markets:
             return ProviderResponse(success=False, error=f"yfinance 不支持 market={req.market}")
+        interval = self._interval(req)
+        if interval not in {"", "1d", "day", "d"}:
+            return ProviderResponse(success=False, error=f"yfinance daily provider does not support interval={interval}")
 
         symbol = req.symbols[0]
         days = self._days(req)
@@ -91,6 +100,7 @@ class YFinanceKlineProvider(KlineProvider):
                             high=float(row["High"]),
                             low=float(row["Low"]),
                             volume=float(row.get("Volume") or 0),
+                            source="yfinance",
                         )
                     )
                 except Exception as e:

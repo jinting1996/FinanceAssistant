@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import unittest
+import asyncio
 
 from src.core.providers.base import KlineProvider, ProviderRequest, ProviderResponse
 from src.core.providers.orchestrator import KlineOrchestrator
 
 
 class _MockKlineProvider(KlineProvider):
-    def __init__(self, name, markets=("CN", "HK", "US"), results=None, config=None):
+    def __init__(self, name, markets=("CN", "HK", "US"), results=None, config=None, delay=0):
         super().__init__(config=config)
         self.name = name
         self.supports_markets = set(markets)
         self._results = list(results or [])
         self.call_count = 0
+        self.delay = delay
 
     async def fetch(self, req: ProviderRequest) -> ProviderResponse:
         self.call_count += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if self._results:
             return self._results.pop(0)
         # 默认返回 1 条假 kline
@@ -89,6 +93,20 @@ class TestKlineOrchestrator(unittest.IsolatedAsyncioTestCase):
         req = ProviderRequest(symbols=("600519",), market="CN", extra=(("days", 30),))
         await orch.fetch(req)
         await orch.fetch(req)
+        self.assertEqual(p1.call_count, 1)
+
+    async def test_singleflight_dedupes_concurrent_cache_miss(self):
+        """K线并发 cache miss — 同 key 只放行一次 provider 调用"""
+        orch = KlineOrchestrator()
+        p1 = _MockKlineProvider("p1", delay=0.02)
+        orch.register("p1", lambda cfg: p1)
+        orch._get_or_create_instance("p1", {})
+        _stub_sources(orch, ["p1"])
+
+        req = ProviderRequest(symbols=("600519",), market="CN", extra=(("days", 30),))
+        results = await asyncio.gather(*[orch.fetch(req) for _ in range(10)])
+
+        self.assertTrue(all(resp.success for resp in results))
         self.assertEqual(p1.call_count, 1)
 
 

@@ -1,5 +1,6 @@
 from src.collectors.kline_collector import KlineData
-from src.web.api.klines import _load_klines
+from src.models.market import MarketCode
+from src.web.api.klines import _load_klines, _load_klines_from_orchestrator
 
 
 class FakeKlineCollector:
@@ -55,3 +56,61 @@ def test_legacy_one_m_interval_still_means_monthly_kline():
     assert out[0].high == 13
     assert out[0].low == 9
     assert out[0].volume == 220
+
+
+def test_kline_collector_delegates_daily_request_to_orchestrator(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        success = True
+        error = ""
+        data = [
+            KlineData(
+                date="2026-06-12",
+                open=200,
+                close=201,
+                high=202,
+                low=199,
+                volume=1000,
+                source="eastmoney",
+            )
+        ]
+
+    def fake_fetch(symbol, market, days, interval, cache_ttl_sec):
+        calls.append((symbol, market, days, interval, cache_ttl_sec))
+        return FakeResponse()
+
+    monkeypatch.setattr("src.core.kline_service.fetch_kline_response_sync", fake_fetch)
+
+    from src.collectors.kline_collector import KlineCollector
+
+    out = KlineCollector(MarketCode.US).get_klines("AAPL", days=5)
+
+    assert [k.date for k in out] == ["2026-06-12"]
+    assert out[0].source == "eastmoney"
+    assert calls == [("AAPL", MarketCode.US, 5, "1d", 60)]
+
+
+def test_api_monthly_interval_fetches_daily_from_orchestrator(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        success = True
+        error = ""
+        data = [
+            KlineData(date="2026-01-02", open=10, close=11, high=12, low=9, volume=100, source="mock"),
+            KlineData(date="2026-01-30", open=11, close=12, high=13, low=10, volume=120, source="mock"),
+            KlineData(date="2026-02-02", open=12, close=13, high=14, low=11, volume=130, source="mock"),
+        ]
+
+    def fake_fetch(symbol, market, days, interval, cache_ttl_sec):
+        calls.append((symbol, market, days, interval, cache_ttl_sec))
+        return FakeResponse()
+
+    monkeypatch.setattr("src.web.api.klines.fetch_kline_response_sync", fake_fetch)
+
+    out = _load_klines_from_orchestrator("600519", MarketCode.CN, 60, "1m")
+
+    assert [k.date for k in out] == ["2026-01-30", "2026-02-02"]
+    assert out[0].source == "mock"
+    assert calls == [("600519", MarketCode.CN, 60, "1d", 60)]

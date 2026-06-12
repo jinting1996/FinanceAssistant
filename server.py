@@ -399,6 +399,30 @@ def seed_data_sources():
             "test_symbols": ["601127", "600519", "300750"],
         },
         {
+            "name": "东方财富K线",
+            "type": "kline",
+            "provider": "eastmoney",
+            "config": {
+                "description": "东方财富日K/分钟K。适用 A股/港股/美股，作为腾讯 K 线备源。",
+            },
+            "enabled": True,
+            "priority": 5,
+            "supports_batch": False,
+            "test_symbols": ["600519", "00700", "AAPL"],
+        },
+        {
+            "name": "Stooq 美股K线",
+            "type": "kline",
+            "provider": "stooq",
+            "config": {
+                "description": "Stooq 免费美股日K，作为美股兜底数据源。",
+            },
+            "enabled": True,
+            "priority": 15,
+            "supports_batch": False,
+            "test_symbols": ["AAPL"],
+        },
+        {
             "name": "Tushare K线",
             "type": "kline",
             "provider": "tushare",

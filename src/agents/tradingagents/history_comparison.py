@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 
-from src.collectors.kline_collector import KlineCollector
+from src.core.kline_service import fetch_klines_sync
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
 from src.web.models import AnalysisHistory
@@ -123,8 +123,12 @@ def build_history_comparison(
 
     # 拉历史 K线(回溯天数 + 30 天缓冲让最早的决策也能算 20 日收益)
     try:
-        collector = KlineCollector(_resolve_market(market))
-        klines = collector.get_klines(symbol, days=days + 40)
+        klines = fetch_klines_sync(
+            symbol,
+            _resolve_market(market),
+            days=days + 40,
+            interval="1d",
+        )
     except Exception as e:
         logger.warning(f"[TA history] 拉 K线失败: {e}")
         klines = []

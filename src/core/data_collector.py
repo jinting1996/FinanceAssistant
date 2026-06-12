@@ -570,12 +570,14 @@ class DataCollectorManager:
     async def _test_kline_source(
         self, source: DataSource, test_symbols: list[str]
     ) -> CollectorResult:
-        """按 provider 测试 K 线源:tencent/tushare/yfinance 各走自己实现,不串备份链。
+        """按 provider 测试 K 线源,各走自己实现,不串备份链。
 
         测试需要的是"这个 provider 自己工作正常",不是"整条主备链有 fallback 能跑通",
         所以不走 Orchestrator(它会自动切到下一条)。
         """
         from src.core.providers.base import ProviderRequest
+        from src.core.providers.kline.eastmoney import EastmoneyKlineProvider
+        from src.core.providers.kline.stooq import StooqKlineProvider
         from src.core.providers.kline.tencent import TencentKlineProvider
         from src.core.providers.kline.tushare import TushareKlineProvider
         from src.core.providers.kline.yfinance import YFinanceKlineProvider
@@ -584,6 +586,12 @@ class DataCollectorManager:
         if source.provider == "tencent":
             provider = TencentKlineProvider(config=cfg)
             market = "CN"
+        elif source.provider == "eastmoney":
+            provider = EastmoneyKlineProvider(config=cfg)
+            market = "CN"
+        elif source.provider == "stooq":
+            provider = StooqKlineProvider(config=cfg)
+            market = "US"
         elif source.provider == "tushare":
             provider = TushareKlineProvider(config=cfg)
             market = "CN"

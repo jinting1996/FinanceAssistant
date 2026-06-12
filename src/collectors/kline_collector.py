@@ -10,6 +10,7 @@ import httpx
 import time
 
 from src.core.cn_symbol import get_cn_prefix, is_cn_sh
+from src.core.providers.cache import TTLCache
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,15 @@ TENCENT_KLINE_URL = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 
 
-_STOOQ_CACHE: dict[str, tuple[float, list["KlineData"]]] = {}
 _STOOQ_CACHE_TTL_SECONDS = 300
-_EASTMONEY_CACHE: dict[str, tuple[float, int, list["KlineData"]]] = {}
+_STOOQ_CACHE = TTLCache(default_ttl_sec=_STOOQ_CACHE_TTL_SECONDS, max_size=512)
 _EASTMONEY_CACHE_TTL_SECONDS = 300
-_EASTMONEY_INTRADAY_CACHE: dict[str, tuple[float, int, list["KlineData"]]] = {}
+_EASTMONEY_CACHE = TTLCache(default_ttl_sec=_EASTMONEY_CACHE_TTL_SECONDS, max_size=1024)
 _EASTMONEY_INTRADAY_CACHE_TTL_SECONDS = 45
+_EASTMONEY_INTRADAY_CACHE = TTLCache(
+    default_ttl_sec=_EASTMONEY_INTRADAY_CACHE_TTL_SECONDS,
+    max_size=2048,
+)
 
 
 def _fetch_stooq_us_klines(symbol: str) -> list[KlineData]:
@@ -37,11 +41,10 @@ def _fetch_stooq_us_klines(symbol: str) -> list[KlineData]:
     if not sym:
         return []
 
-    now = time.time()
     cached = _STOOQ_CACHE.get(sym)
-    stale = cached[1] if cached else []
-    if cached and (now - cached[0]) < _STOOQ_CACHE_TTL_SECONDS:
-        return cached[1]
+    stale = cached or []
+    if cached:
+        return cached
 
     # Stooq uses dot for class shares (e.g., brk.b). Keep as-is.
     stooq_sym = f"{sym}.us"
@@ -93,11 +96,12 @@ def _fetch_stooq_us_klines(symbol: str) -> list[KlineData]:
                     high=float(h),
                     low=float(l),
                     volume=float(v) if v else 0,
+                    source="stooq",
                 )
             )
         except Exception:
             continue
-    _STOOQ_CACHE[sym] = (now, out)
+    _STOOQ_CACHE.set(sym, out)
     return out
 
 
@@ -118,19 +122,15 @@ def _fetch_eastmoney_klines(
     sym = (symbol or "").strip()
     if not sym:
         return []
-    if market not in (MarketCode.CN, MarketCode.HK):
+    if market not in (MarketCode.CN, MarketCode.HK, MarketCode.US):
         return []
 
     need_days = max(1, int(days or 1))
     cache_key = f"{market.value}:{sym}"
-    now = time.time()
     cached = _EASTMONEY_CACHE.get(cache_key)
-    if (
-        cached
-        and (now - cached[0]) < _EASTMONEY_CACHE_TTL_SECONDS
-        and cached[1] >= need_days
-    ):
-        bars = cached[2]
+    stale = cached[1] if cached else []
+    if cached and cached[0] >= need_days:
+        bars = cached[1]
         return bars[-need_days:] if len(bars) > need_days else bars
 
     secid = _eastmoney_secid(sym, market)
@@ -182,6 +182,7 @@ def _fetch_eastmoney_klines(
                             high=float(parts[3]),
                             low=float(parts[4]),
                             volume=float(parts[5]),
+                            source="eastmoney",
                         )
                     )
                 except Exception:
@@ -196,13 +197,11 @@ def _fetch_eastmoney_klines(
 
     if not best and last_err is not None:
         logger.warning(f"Eastmoney 获取 {symbol} K线失败: {last_err}")
-        stale = _EASTMONEY_CACHE.get(cache_key)
         if stale:
-            bars = stale[2]
-            return bars[-need_days:] if len(bars) > need_days else bars
+            return stale[-need_days:] if len(stale) > need_days else stale
         return []
 
-    _EASTMONEY_CACHE[cache_key] = (now, len(best), best)
+    _EASTMONEY_CACHE.set(cache_key, (len(best), best))
     return best[-need_days:] if len(best) > need_days else best
 
 
@@ -220,14 +219,10 @@ def _fetch_eastmoney_intraday_klines(
     klt = "5" if str(interval).lower() in ("5", "5min", "5m") else "1"
     need_limit = min(max(1, int(limit or 1)), 1200)
     cache_key = f"{market.value}:{sym}:{klt}"
-    now = time.time()
     cached = _EASTMONEY_INTRADAY_CACHE.get(cache_key)
-    if (
-        cached
-        and (now - cached[0]) < _EASTMONEY_INTRADAY_CACHE_TTL_SECONDS
-        and cached[1] >= need_limit
-    ):
-        bars = cached[2]
+    stale = cached[1] if cached else []
+    if cached and cached[0] >= need_limit:
+        bars = cached[1]
         return bars[-need_limit:] if len(bars) > need_limit else bars
 
     secid = _eastmoney_secid(sym, market)
@@ -279,6 +274,7 @@ def _fetch_eastmoney_intraday_klines(
                             high=float(parts[3]),
                             low=float(parts[4]),
                             volume=float(parts[5]),
+                            source="eastmoney",
                         )
                     )
                 except Exception:
@@ -293,13 +289,11 @@ def _fetch_eastmoney_intraday_klines(
 
     if not best and last_err is not None:
         logger.warning(f"Eastmoney 获取 {symbol} 分钟K线失败: {last_err}")
-        stale = _EASTMONEY_INTRADAY_CACHE.get(cache_key)
         if stale:
-            bars = stale[2]
-            return bars[-need_limit:] if len(bars) > need_limit else bars
+            return stale[-need_limit:] if len(stale) > need_limit else stale
         return []
 
-    _EASTMONEY_INTRADAY_CACHE[cache_key] = (now, len(best), best)
+    _EASTMONEY_INTRADAY_CACHE.set(cache_key, (len(best), best))
     return best[-need_limit:] if len(best) > need_limit else best
 
 
@@ -313,6 +307,7 @@ class KlineData:
     high: float
     low: float
     volume: float
+    source: str = ""
 
 
 @dataclass
@@ -376,6 +371,71 @@ def _tencent_symbol(symbol: str, market: MarketCode) -> str:
     if market == MarketCode.US:
         return f"us{symbol}"
     return get_cn_prefix(symbol) + symbol
+
+
+def _fetch_tencent_klines(
+    symbol: str,
+    market: MarketCode,
+    days: int = 60,
+) -> list[KlineData]:
+    """Fetch daily klines from Tencent without collector-level fallback."""
+
+    tencent_sym = _tencent_symbol(symbol, market)
+    params = {
+        "param": f"{tencent_sym},day,,,{days},qfq",
+        "_var": "kline_dayqfq",
+    }
+
+    with httpx.Client(follow_redirects=True, timeout=10) as client:
+        resp = client.get(TENCENT_KLINE_URL, params=params)
+        text = resp.text
+
+    # 解析 JS 变量格式: kline_dayqfq={...}
+    if "=" not in text:
+        logger.warning(f"获取 {symbol} K线数据失败: 格式错误")
+        return []
+
+    json_str = text.split("=", 1)[1].strip()
+    if json_str.endswith(";"):
+        json_str = json_str[:-1]
+
+    import json
+
+    data = json.loads(json_str)
+
+    # 解析数据 - 兼容多种 API 格式
+    raw_data = data.get("data", {})
+    day_data = []
+
+    if isinstance(raw_data, dict):
+        # 旧格式: data.{symbol}.day 或 data.{symbol}.qfqday
+        stock_data = raw_data.get(tencent_sym, {})
+        if isinstance(stock_data, dict):
+            day_data = stock_data.get("day") or stock_data.get("qfqday") or []
+    elif isinstance(raw_data, list):
+        # 新格式: data 直接是 K 线数组
+        day_data = raw_data
+
+    if not day_data:
+        logger.warning(
+            f"K线数据为空 - symbol: {symbol}, code: {data.get('code')}, msg: {data.get('msg')}, data长度: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}"
+        )
+
+    klines: list[KlineData] = []
+    for item in day_data:
+        if len(item) >= 5:
+            klines.append(
+                KlineData(
+                    date=item[0],
+                    open=float(item[1]),
+                    close=float(item[2]),
+                    high=float(item[3]),
+                    low=float(item[4]),
+                    volume=float(item[5]) if len(item) > 5 else 0,
+                    source="tencent",
+                )
+            )
+    return klines
 
 
 def _calculate_ma(closes: list[float], period: int) -> float | None:
@@ -576,112 +636,55 @@ def _find_cross_days(
 
 
 class KlineCollector:
-    """K线数据采集器（腾讯 API）"""
+    """K线数据采集器兼容包装。
+
+    新代码应直接使用 KlineOrchestrator；该类保留给旧调用方。
+    """
 
     def __init__(self, market: MarketCode):
         self.market = market
 
     def get_klines(self, symbol: str, days: int = 60) -> list[KlineData]:
         """获取日K线数据"""
-        tencent_sym = _tencent_symbol(symbol, self.market)
-
-        params = {
-            "param": f"{tencent_sym},day,,,{days},qfq",
-            "_var": "kline_dayqfq",
-        }
+        from src.core.kline_service import fetch_kline_response_sync
 
         try:
-            with httpx.Client(follow_redirects=True, timeout=10) as client:
-                resp = client.get(TENCENT_KLINE_URL, params=params)
-                text = resp.text
-
-            # 解析 JS 变量格式: kline_dayqfq={...}
-            if "=" not in text:
-                logger.warning(f"获取 {symbol} K线数据失败: 格式错误")
-                return []
-
-            json_str = text.split("=", 1)[1].strip()
-            if json_str.endswith(";"):
-                json_str = json_str[:-1]
-
-            import json
-
-            data = json.loads(json_str)
-
-            # 解析数据 - 兼容多种 API 格式
-            raw_data = data.get("data", {})
-            day_data = []
-
-            if isinstance(raw_data, dict):
-                # 旧格式: data.{symbol}.day 或 data.{symbol}.qfqday
-                stock_data = raw_data.get(tencent_sym, {})
-                if isinstance(stock_data, dict):
-                    day_data = stock_data.get("day") or stock_data.get("qfqday") or []
-            elif isinstance(raw_data, list):
-                # 新格式: data 直接是 K 线数组
-                day_data = raw_data
-
-            if not day_data:
-                logger.warning(
-                    f"K线数据为空 - symbol: {symbol}, code: {data.get('code')}, msg: {data.get('msg')}, data长度: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}"
-                )
-
-            klines = []
-            for item in day_data:
-                if len(item) >= 5:
-                    klines.append(
-                        KlineData(
-                            date=item[0],
-                            open=float(item[1]),
-                            close=float(item[2]),
-                            high=float(item[3]),
-                            low=float(item[4]),
-                            volume=float(item[5]) if len(item) > 5 else 0,
-                        )
-                    )
-
-            # Tencent 对部分美股返回的 day 数据异常偏少（仅 1-2 条），此时使用 Stooq 回退。
-            if self.market == MarketCode.US and len(klines) < max(10, min(days, 30)):
-                fallback = _fetch_stooq_us_klines(symbol)
-                if fallback:
-                    # Stooq 返回全量历史，这里取最后 days 条
-                    return fallback[-days:]
-
-            # CN/HK: Tencent 在高 days 时可能只返回近几年，尝试 Eastmoney 补全更长历史
-            if self.market in (MarketCode.CN, MarketCode.HK):
-                need_em = days >= 500 or len(klines) < max(120, int(days * 0.6))
-                if need_em:
-                    # 额外放大窗口，提升拿到更长历史的概率
-                    em_target_days = min(max(days, 3000), 20000)
-                    em = _fetch_eastmoney_klines(symbol, self.market, em_target_days)
-                    if len(em) > len(klines):
-                        return em[-days:] if len(em) > days else em
-
-            return klines
-
+            resp = fetch_kline_response_sync(
+                symbol,
+                self.market,
+                days=int(days or 60),
+                interval="1d",
+                cache_ttl_sec=60,
+            )
         except Exception as e:
             logger.error(f"获取 {symbol} K线数据失败: {e}")
-            # 美股回退到 Stooq
-            if self.market == MarketCode.US:
-                fb = _fetch_stooq_us_klines(symbol)
-                return fb[-days:] if fb else []
-            # CN/HK 回退到 Eastmoney
-            if self.market in (MarketCode.CN, MarketCode.HK):
-                fb = _fetch_eastmoney_klines(symbol, self.market, min(max(days, 3000), 20000))
-                return fb[-days:] if fb else []
             return []
+        if not resp.success:
+            logger.warning("获取 %s K线数据失败: %s", symbol, resp.error)
+            return []
+        return resp.data or []
 
     def get_intraday_klines(
         self, symbol: str, interval: str = "1min", limit: int = 241
     ) -> list[KlineData]:
         """获取分钟K线数据。当前优先支持 A股/港股，其他市场返回空列表。"""
+        from src.core.kline_service import fetch_kline_response_sync
 
-        return _fetch_eastmoney_intraday_klines(
-            symbol=symbol,
-            market=self.market,
-            interval=interval,
-            limit=limit,
-        )
+        try:
+            resp = fetch_kline_response_sync(
+                symbol,
+                self.market,
+                days=int(limit or 241),
+                interval=str(interval or "1min"),
+                cache_ttl_sec=45,
+            )
+        except Exception as e:
+            logger.error(f"获取 {symbol} 分钟K线失败: {e}")
+            return []
+        if not resp.success:
+            logger.warning("获取 %s 分钟K线失败: %s", symbol, resp.error)
+            return []
+        return resp.data or []
 
     def get_technical_indicators(self, symbol: str) -> TechnicalIndicators:
         """计算技术指标"""

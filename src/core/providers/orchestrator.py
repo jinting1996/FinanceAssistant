@@ -22,15 +22,36 @@ import collections
 import logging
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Callable
 
+from src.core.http import run_sync
 from src.core.providers.base import Provider, ProviderRequest, ProviderResponse, QuoteProvider
 from src.core.providers.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
 ProviderFactory = Callable[[dict], Provider]
+
+
+def _extra(req: ProviderRequest, key: str, default=None):
+    for k, v in req.extra:
+        if k == key:
+            return v
+    return default
+
+
+def _replace_extra(req: ProviderRequest, key: str, value) -> ProviderRequest:
+    items = [(k, v) for k, v in req.extra if k != key]
+    items.append((key, value))
+    return ProviderRequest(
+        symbols=req.symbols,
+        market=req.market,
+        timeframe=req.timeframe,
+        since_hours=req.since_hours,
+        extra=tuple(items),
+    )
 
 
 @dataclass
@@ -79,6 +100,10 @@ class Orchestrator:
         self._metrics: dict[str, _Metrics] = {}
         self._metrics_lock = threading.Lock()
         self._cache = TTLCache(default_ttl_sec=self.default_ttl_sec)
+        self._singleflight_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._singleflight_guard = threading.Lock()
 
     def register(self, name: str, factory: ProviderFactory) -> None:
         """注册 provider 工厂。name 必须与 DataSource.provider 字段一致。"""
@@ -144,6 +169,15 @@ class Orchestrator:
             m = self._metrics.setdefault(provider_name, _Metrics())
             m.record(success, latency_ms, error)
 
+    def _singleflight_lock(self, cache_key: str) -> asyncio.Lock:
+        loop_key = f"{id(asyncio.get_running_loop())}:{cache_key}"
+        with self._singleflight_guard:
+            lock = self._singleflight_locks.get(loop_key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._singleflight_locks[loop_key] = lock
+            return lock
+
     def health(self) -> dict[str, dict]:
         """返回所有已注册 provider 的健康度快照。"""
         with self._metrics_lock:
@@ -155,13 +189,8 @@ class Orchestrator:
         *,
         cache_ttl_sec: float | None = None,
     ) -> ProviderResponse:
-        """Sync 包装,供同步代码路径调用。
-
-        注意:**只能在没有运行中事件循环的线程使用**。例如 paper_trading_engine
-        的 `_scan_sync` 通过 `asyncio.to_thread` 在 worker 线程跑,该线程没有 loop,
-        这里 `asyncio.run` 才安全。在 async 函数体内请直接 `await fetch(...)`。
-        """
-        return asyncio.run(self.fetch(req, cache_ttl_sec=cache_ttl_sec))
+        """Sync 包装,供同步代码路径调用。"""
+        return run_sync(self.fetch(req, cache_ttl_sec=cache_ttl_sec))
 
     async def fetch(
         self,
@@ -178,6 +207,27 @@ class Orchestrator:
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached  # 缓存命中,直接返回
+
+        lock = self._singleflight_lock(cache_key)
+        async with lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            return await self._fetch_uncached(
+                req,
+                cache_key=cache_key,
+                cache_ttl_sec=cache_ttl_sec,
+            )
+
+    async def _fetch_uncached(
+        self,
+        req: ProviderRequest,
+        *,
+        cache_key: str,
+        cache_ttl_sec: float | None = None,
+    ) -> ProviderResponse:
+        """执行实际主备链查询。调用方负责 single-flight 与首次缓存读取。"""
 
         sources = self._load_enabled_sources(req.market)
         if not sources:
@@ -232,6 +282,98 @@ class QuoteOrchestrator(Orchestrator):
 class KlineOrchestrator(Orchestrator):
     source_type = "kline"
     default_ttl_sec = 60.0  # K 线变更慢,1 分钟缓存
+
+    def _is_daily_cacheable(self, req: ProviderRequest) -> bool:
+        interval = str(_extra(req, "interval", "1d") or "1d").lower()
+        return len(req.symbols) == 1 and interval in {"", "1d", "day", "d"}
+
+    async def fetch(
+        self,
+        req: ProviderRequest,
+        *,
+        cache_ttl_sec: float | None = None,
+    ) -> ProviderResponse:
+        if not self._is_daily_cacheable(req):
+            return await super().fetch(req, cache_ttl_sec=cache_ttl_sec)
+
+        cache_key = req.cache_key(self.source_type)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        lock = self._singleflight_lock(cache_key)
+        async with lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            symbol = req.symbols[0]
+            days = max(1, int(_extra(req, "days", 60) or 60))
+
+            from src.core.stock_kline_cache import (
+                calculate_increment_days,
+                load_cached_daily_klines,
+                upsert_daily_klines,
+            )
+
+            cached_rows, complete = await asyncio.to_thread(
+                load_cached_daily_klines,
+                req.market,
+                symbol,
+                days=days,
+            )
+            if complete:
+                resp = ProviderResponse(success=True, data=cached_rows, provider="sqlite")
+                self._cache.set(cache_key, resp, ttl_sec=cache_ttl_sec)
+                return resp
+
+            fetch_days = calculate_increment_days(cached_rows, days)
+            fetch_req = _replace_extra(req, "days", fetch_days)
+            resp = await self._fetch_uncached(
+                fetch_req,
+                cache_key=fetch_req.cache_key(self.source_type),
+                cache_ttl_sec=0,
+            )
+            if resp.success and not resp.is_empty:
+                stats = await asyncio.to_thread(
+                    upsert_daily_klines,
+                    req.market,
+                    symbol,
+                    resp.data or [],
+                )
+                if stats.get("reset") and fetch_days < days:
+                    full_resp = await self._fetch_uncached(
+                        req,
+                        cache_key=cache_key,
+                        cache_ttl_sec=0,
+                    )
+                    if full_resp.success and not full_resp.is_empty:
+                        await asyncio.to_thread(
+                            upsert_daily_klines,
+                            req.market,
+                            symbol,
+                            full_resp.data or [],
+                        )
+                        resp = full_resp
+
+                refreshed, _ = await asyncio.to_thread(
+                    load_cached_daily_klines,
+                    req.market,
+                    symbol,
+                    days=days,
+                    max_stale_days=3650,
+                )
+                if refreshed:
+                    out = ProviderResponse(
+                        success=True,
+                        data=refreshed,
+                        provider=resp.provider,
+                        latency_ms=resp.latency_ms,
+                    )
+                    self._cache.set(cache_key, out, ttl_sec=cache_ttl_sec)
+                    return out
+
+            return resp
 
 
 class NewsOrchestrator(Orchestrator):
@@ -297,11 +439,15 @@ def get_kline_orchestrator() -> KlineOrchestrator:
         if _kline_orchestrator is not None:
             return _kline_orchestrator
         orch = KlineOrchestrator()
+        from src.core.providers.kline.eastmoney import EastmoneyKlineProvider
+        from src.core.providers.kline.stooq import StooqKlineProvider
         from src.core.providers.kline.tencent import TencentKlineProvider
         from src.core.providers.kline.tushare import TushareKlineProvider
         from src.core.providers.kline.yfinance import YFinanceKlineProvider
 
         orch.register("tencent", lambda cfg: TencentKlineProvider(config=cfg))
+        orch.register("eastmoney", lambda cfg: EastmoneyKlineProvider(config=cfg))
+        orch.register("stooq", lambda cfg: StooqKlineProvider(config=cfg))
         orch.register("tushare", lambda cfg: TushareKlineProvider(config=cfg))
         orch.register("yfinance", lambda cfg: YFinanceKlineProvider(config=cfg))
         _kline_orchestrator = orch

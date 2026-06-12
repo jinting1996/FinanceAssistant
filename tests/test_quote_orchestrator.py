@@ -243,6 +243,21 @@ class TestTTLCache(unittest.TestCase):
         c.set("k", "v", ttl_sec=0)
         self.assertIsNone(c.get("k"))
 
+    def test_set_sweeps_expired_keys_before_capacity_eviction(self):
+        """TTL 缓存 — set 时顺手清理过期键,避免无上限增长"""
+        import time as _t
+
+        c = TTLCache(default_ttl_sec=10, max_size=2)
+        c.set("expired", "old", ttl_sec=0.01)
+        _t.sleep(0.05)
+        c.set("fresh1", "v1")
+        c.set("fresh2", "v2")
+
+        self.assertIsNone(c.get("expired"))
+        self.assertEqual(c.get("fresh1"), "v1")
+        self.assertEqual(c.get("fresh2"), "v2")
+        self.assertEqual(len(c), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src.core.context_store import cleanup_context_data
 from src.core.entry_candidates import evaluate_entry_candidate_outcomes
+from src.core.housekeeping import run_housekeeping
 from src.core.prediction_outcome import evaluate_pending_prediction_outcomes
 from src.core.strategy_engine import (
     evaluate_strategy_outcomes,
@@ -34,6 +35,7 @@ class ContextMaintenanceScheduler:
         self.outcome_retention_days = max(60, int(outcome_retention_days))
         self._evaluating = False
         self._cleaning = False
+        self._housekeeping = False
         self._refreshing = False
 
     async def _evaluate_job(self):
@@ -127,6 +129,21 @@ class ContextMaintenanceScheduler:
         finally:
             self._cleaning = False
 
+    async def _housekeeping_job(self):
+        if self._housekeeping:
+            logger.debug("[上下文维护] 上一轮数据 housekeeping 仍在执行，跳过本轮")
+            return
+        self._housekeeping = True
+        try:
+            deleted = await asyncio.to_thread(run_housekeeping)
+            has_work = bool(deleted and any(deleted.values()) if isinstance(deleted, dict) else deleted)
+            level = logging.INFO if has_work else logging.DEBUG
+            logger.log(level, "[上下文维护] 数据 housekeeping 完成: %s", deleted)
+        except Exception as e:
+            logger.exception(f"[上下文维护] 数据 housekeeping 异常: {e}")
+        finally:
+            self._housekeeping = False
+
     async def evaluate_once(self) -> dict:
         agent_task = asyncio.to_thread(evaluate_pending_prediction_outcomes)
         candidate_task = asyncio.to_thread(
@@ -208,12 +225,25 @@ class ContextMaintenanceScheduler:
             outcome_days=self.outcome_retention_days,
         )
 
+    async def housekeeping_once(self) -> dict:
+        return await asyncio.to_thread(run_housekeeping)
+
     def start(self):
         self.scheduler.add_job(
             self._evaluate_job,
             "interval",
             hours=self.eval_interval_hours,
             id="context_maintenance_evaluate",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            self._housekeeping_job,
+            "cron",
+            hour=4,
+            minute=0,
+            id="context_maintenance_housekeeping",
             replace_existing=True,
             coalesce=True,
             max_instances=1,

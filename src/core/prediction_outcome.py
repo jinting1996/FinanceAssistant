@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 
-from src.collectors.kline_collector import KlineCollector
 from src.core.context_store import (
     list_pending_prediction_outcomes,
     mark_agent_prediction_outcome,
 )
+from src.core.kline_service import fetch_klines_sync
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -97,9 +97,11 @@ def evaluate_pending_prediction_outcomes(
         if cache_key not in kline_cache:
             lookback_days = max(120, (today - pred_day).days + 30)
             try:
-                kline_cache[cache_key] = KlineCollector(market).get_klines(
+                kline_cache[cache_key] = fetch_klines_sync(
                     rec.stock_symbol,
+                    market,
                     days=min(lookback_days, 600),
+                    interval="1d",
                 )
             except Exception as e:
                 logger.warning(

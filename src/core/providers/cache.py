@@ -2,7 +2,7 @@
 
 - 单进程内存缓存,够 60s 调度器叠加防抖用,不依赖 Redis。
 - 线程安全:用 `threading.Lock` 包裹读写。
-- 不做后台清理,过期 key 在下次 get 时被动剔除,避免后台线程。
+- 不做后台清理,过期 key 在下次 get 或 set 时被动剔除,避免后台线程。
 """
 
 from __future__ import annotations
@@ -38,12 +38,19 @@ class TTLCache:
                 return None
             return entry.value
 
+    def _sweep_expired_locked(self, now: float) -> None:
+        expired = [key for key, entry in self._store.items() if entry.expires_at <= now]
+        for key in expired:
+            self._store.pop(key, None)
+
     def set(self, key: str, value: Any, ttl_sec: float | None = None) -> None:
         ttl = ttl_sec if ttl_sec is not None else self._default_ttl
         if ttl <= 0:
             return  # 显式不缓存
-        expires = time.monotonic() + ttl
+        now = time.monotonic()
+        expires = now + ttl
         with self._lock:
+            self._sweep_expired_locked(now)
             # 超过容量时简单丢最早过期的(粗略 LRU,够用)
             if len(self._store) >= self._max_size and key not in self._store:
                 oldest = min(self._store.items(), key=lambda kv: kv[1].expires_at)

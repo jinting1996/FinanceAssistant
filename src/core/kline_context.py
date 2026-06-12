@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import sqrt
 
 from src.collectors.kline_collector import KlineCollector
+from src.core.kline_service import fetch_klines_sync
 from src.models.market import MarketCode
 
 
@@ -27,7 +28,12 @@ def build_kline_history_context(
     lookback_days: int = 120,
 ) -> dict:
     collector = KlineCollector(market)
-    klines = collector.get_klines(symbol, days=max(lookback_days, 80))
+    klines = fetch_klines_sync(
+        symbol,
+        market,
+        days=max(lookback_days, 80),
+        interval="1d",
+    )
     summary = collector.get_kline_summary(symbol)
     if not klines:
         return {

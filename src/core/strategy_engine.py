@@ -8,9 +8,9 @@ from math import sqrt
 
 from sqlalchemy import and_, case, func
 
-from src.collectors.kline_collector import KlineCollector
 from src.core.entry_candidates import refresh_entry_candidates
 from src.core.json_safe import to_jsonable
+from src.core.kline_service import fetch_klines_sync
 from src.core.strategy_catalog import (
     ensure_strategy_catalog,
     get_effective_weight_map,
@@ -1594,8 +1594,11 @@ def evaluate_strategy_outcomes(
             if key not in kline_cache:
                 try:
                     lookback = max(120, (today - snap_day).days + 30)
-                    kline_cache[key] = KlineCollector(_to_market(key[1])).get_klines(
-                        key[0], days=min(lookback, 600)
+                    kline_cache[key] = fetch_klines_sync(
+                        key[0],
+                        _to_market(key[1]),
+                        days=min(lookback, 600),
+                        interval="1d",
                     )
                 except Exception:
                     kline_cache[key] = []

@@ -295,6 +295,33 @@ class BoardKlineCache(Base):
     fetched_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class StockKlineCache(Base):
+    """Daily kline cache for stocks."""
+
+    __tablename__ = "stock_kline_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "market",
+            "symbol",
+            "date",
+            name="uq_stock_kline_market_symbol_date",
+        ),
+        Index("ix_stock_kline_lookup", "market", "symbol", "date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    market = Column(String, nullable=False, default="CN")
+    symbol = Column(String, nullable=False)
+    date = Column(String, nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=True)
+    source = Column(String, nullable=False, default="")
+    fetched_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class StockScreenerFormula(Base):
     """Saved formula for the stock screener."""
 

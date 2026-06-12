@@ -1,12 +1,16 @@
-from fastapi import APIRouter, HTTPException
+import asyncio
 from datetime import datetime
 
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.collectors.kline_collector import KlineCollector
+from src.core.kline_service import fetch_kline_response_sync
+from src.core.providers import ProviderRequest, get_kline_orchestrator
 from src.models.market import MarketCode
 
 router = APIRouter()
+BATCH_CONCURRENCY = 5
 
 
 class KlineItem(BaseModel):
@@ -45,9 +49,26 @@ def _serialize_klines(klines) -> list[dict]:
             "high": k.high,
             "low": k.low,
             "volume": k.volume,
+            "source": getattr(k, "source", "") or "",
         }
         for k in klines
     ]
+
+
+def _klines_meta(klines) -> dict:
+    latest = None
+    sources: list[str] = []
+    for k in klines or []:
+        date_value = getattr(k, "date", None)
+        if date_value and (latest is None or str(date_value) > latest):
+            latest = str(date_value)
+        source = getattr(k, "source", "") or ""
+        if source and source not in sources:
+            sources.append(source)
+    return {
+        "data_as_of": latest,
+        "source": ",".join(sources) if sources else None,
+    }
 
 
 def _aggregate_klines(klines, interval: str) -> list:
@@ -93,6 +114,7 @@ def _aggregate_klines(klines, interval: str) -> list:
                 high=high,
                 low=low,
                 volume=vol,
+                source=getattr(first, "source", "") or "",
             )
         )
     out.sort(key=lambda k: k.date)
@@ -124,45 +146,98 @@ def _load_klines(collector: KlineCollector, symbol: str, days: int, interval: st
     return _aggregate_klines(klines, interval)
 
 
+def _load_klines_from_orchestrator(symbol: str, market: MarketCode, days: int, interval: str):
+    if _is_intraday_interval(interval):
+        normalized_interval = _normalize_intraday_interval(interval)
+        fetch_days = min(max(int(days or 0), 60), 1200)
+        req_interval = normalized_interval
+        ttl = 45
+    else:
+        fetch_days = int(days or 60)
+        req_interval = "1d"
+        ttl = 60
+
+    resp = fetch_kline_response_sync(
+        symbol,
+        market,
+        days=fetch_days,
+        interval=req_interval,
+        cache_ttl_sec=ttl,
+    )
+    if not resp.success:
+        raise HTTPException(502, resp.error or "K线数据源请求失败")
+    klines = resp.data or []
+    if _is_intraday_interval(interval):
+        return klines
+    return _aggregate_klines(klines, interval)
+
+
+async def _load_klines_from_orchestrator_async(symbol: str, market: MarketCode, days: int, interval: str):
+    if _is_intraday_interval(interval):
+        normalized_interval = _normalize_intraday_interval(interval)
+        fetch_days = min(max(int(days or 0), 60), 1200)
+        req_interval = normalized_interval
+        ttl = 45
+    else:
+        fetch_days = int(days or 60)
+        req_interval = "1d"
+        ttl = 60
+
+    req = ProviderRequest(
+        symbols=(symbol,),
+        market=market.value,
+        extra=(("days", fetch_days), ("interval", req_interval)),
+    )
+    resp = await get_kline_orchestrator().fetch(req, cache_ttl_sec=ttl)
+    if not resp.success:
+        raise HTTPException(502, resp.error or "K线数据源请求失败")
+    klines = resp.data or []
+    if _is_intraday_interval(interval):
+        return klines
+    return _aggregate_klines(klines, interval)
+
+
 @router.get("/{symbol}")
 def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
     """获取单只股票K线数据"""
     market_code = _parse_market(market)
-    collector = KlineCollector(market_code)
-    klines = _load_klines(collector, symbol, days, interval)
+    klines = _load_klines_from_orchestrator(symbol, market_code, days, interval)
+    meta = _klines_meta(klines)
     return {
         "symbol": symbol,
         "market": market_code.value,
         "days": days,
         "interval": _normalize_intraday_interval(interval) if _is_intraday_interval(interval) else interval,
+        **meta,
         "klines": _serialize_klines(klines),
     }
 
 
 @router.post("/batch")
-def get_klines_batch(payload: KlineBatchRequest):
+async def get_klines_batch(payload: KlineBatchRequest):
     """批量获取K线数据"""
     if not payload.items:
         return []
 
-    results = []
-    for item in payload.items:
+    semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
+
+    async def _one(item: KlineItem):
         market_code = _parse_market(item.market)
-        collector = KlineCollector(market_code)
         days = item.days or 60
         interval = item.interval or "1d"
-        klines = _load_klines(collector, item.symbol, days, interval)
-        results.append(
-            {
-                "symbol": item.symbol,
-                "market": market_code.value,
-                "days": days,
-                "interval": _normalize_intraday_interval(interval) if _is_intraday_interval(interval) else interval,
-                "klines": _serialize_klines(klines),
-            }
-        )
+        async with semaphore:
+            klines = await _load_klines_from_orchestrator_async(item.symbol, market_code, days, interval)
+        meta = _klines_meta(klines)
+        return {
+            "symbol": item.symbol,
+            "market": market_code.value,
+            "days": days,
+            "interval": _normalize_intraday_interval(interval) if _is_intraday_interval(interval) else interval,
+            **meta,
+            "klines": _serialize_klines(klines),
+        }
 
-    return results
+    return await asyncio.gather(*[_one(item) for item in payload.items])
 
 
 @router.get("/{symbol}/summary")
@@ -179,22 +254,24 @@ def get_kline_summary(symbol: str, market: str = "CN"):
 
 
 @router.post("/summary/batch")
-def get_kline_summary_batch(payload: KlineSummaryBatchRequest):
+async def get_kline_summary_batch(payload: KlineSummaryBatchRequest):
     """批量获取K线摘要"""
     if not payload.items:
         return []
 
-    results = []
-    for item in payload.items:
-        market_code = _parse_market(item.market)
-        collector = KlineCollector(market_code)
-        summary = collector.get_kline_summary(item.symbol)
-        results.append(
-            {
-                "symbol": item.symbol,
-                "market": market_code.value,
-                "summary": summary,
-            }
-        )
+    semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
 
-    return results
+    async def _one(item: KlineSummaryItem):
+        market_code = _parse_market(item.market)
+        async with semaphore:
+            summary = await asyncio.to_thread(
+                KlineCollector(market_code).get_kline_summary,
+                item.symbol,
+            )
+        return {
+            "symbol": item.symbol,
+            "market": market_code.value,
+            "summary": summary,
+        }
+
+    return await asyncio.gather(*[_one(item) for item in payload.items])

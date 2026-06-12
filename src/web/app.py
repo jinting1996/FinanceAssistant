@@ -30,6 +30,7 @@ from src.web.api import (
     chat,
     market_events,
     screener,
+    system,
     tasks,
 )
 from src.web.api import insights
@@ -190,6 +191,12 @@ app.include_router(
     tasks.router,
     prefix="/api/tasks",
     tags=["tasks"],
+    dependencies=protected,
+)
+app.include_router(
+    system.router,
+    prefix="/api/system",
+    tags=["system"],
     dependencies=protected,
 )
 

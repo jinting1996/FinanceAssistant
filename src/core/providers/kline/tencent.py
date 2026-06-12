@@ -1,16 +1,11 @@
-"""腾讯 K 线 Provider:包装现有 `KlineCollector.get_klines`。
-
-注意:`KlineCollector.get_klines` 内部已经做了 tencent → stooq(US) → eastmoney(CN/HK)
-的硬编码 fallback,所以 TencentKlineProvider 实际是"含本地 fallback 的 Tencent 链路"。
-Orchestrator 级别再串 tushare / yfinance 是更上层的兜底。
-"""
+"""腾讯 K 线 Provider."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from src.collectors.kline_collector import KlineCollector
+from src.collectors.kline_collector import _fetch_tencent_klines
 from src.core.providers.base import KlineProvider, ProviderRequest, ProviderResponse
 from src.models.market import MarketCode
 
@@ -30,6 +25,12 @@ class TencentKlineProvider(KlineProvider):
                     return 60
         return 60
 
+    def _interval(self, req: ProviderRequest) -> str:
+        for k, v in req.extra:
+            if k == "interval":
+                return str(v or "1d").lower()
+        return "1d"
+
     async def fetch(self, req: ProviderRequest) -> ProviderResponse:
         if not req.symbols:
             return ProviderResponse(success=True, data=[])
@@ -48,12 +49,22 @@ class TencentKlineProvider(KlineProvider):
 
         symbol = req.symbols[0]
         days = self._days(req)
+        interval = self._interval(req)
+        if interval not in {"", "1d", "day", "d"}:
+            return ProviderResponse(success=False, error=f"tencent daily provider does not support interval={interval}")
         try:
             klines = await asyncio.to_thread(
-                KlineCollector(market_code).get_klines, symbol, days
+                _fetch_tencent_klines, symbol, market_code, days
             )
         except Exception as e:
             return ProviderResponse(success=False, error=str(e))
+
+        if req.market == "US" and len(klines) < max(10, min(days, 30)):
+            return ProviderResponse(success=False, error="tencent US daily data insufficient")
+        if req.market in {"CN", "HK"}:
+            need_fallback = days >= 500 or len(klines) < max(120, int(days * 0.6))
+            if need_fallback:
+                return ProviderResponse(success=False, error="tencent daily data insufficient")
 
         return ProviderResponse(success=True, data=klines)
 

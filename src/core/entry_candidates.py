@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import date, datetime, timedelta
 
@@ -10,7 +9,9 @@ from src.config import Settings
 from src.collectors.akshare_collector import AkshareCollector
 from src.collectors.discovery_collector import EastMoneyDiscoveryCollector
 from src.collectors.kline_collector import KlineCollector
+from src.core.http import run_sync
 from src.core.json_safe import to_jsonable
+from src.core.kline_service import fetch_klines_sync
 from src.core.notifier import get_global_proxy
 from src.core.timezone import to_iso_with_tz, utc_now
 from src.core.trade_rules import get_trade_rules
@@ -172,15 +173,7 @@ def _resolve_market_scan_proxy() -> str | None:
 
 
 def _run_async(coro):
-    try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        # In case we're in an already running loop, create an isolated one.
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+    return run_sync(coro)
 
 
 def _candidate_sort_key(item: dict) -> tuple[int, float, float]:
@@ -1794,8 +1787,11 @@ def evaluate_entry_candidate_outcomes(
             if key not in kline_cache:
                 try:
                     lookback = max(120, (today - snap_day).days + 30)
-                    kline_cache[key] = KlineCollector(_to_market(key[1])).get_klines(
-                        key[0], days=min(lookback, 600)
+                    kline_cache[key] = fetch_klines_sync(
+                        key[0],
+                        _to_market(key[1]),
+                        days=min(lookback, 600),
+                        interval="1d",
                     )
                 except Exception:
                     kline_cache[key] = []
