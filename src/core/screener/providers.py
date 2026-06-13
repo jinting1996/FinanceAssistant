@@ -115,12 +115,14 @@ class PanWatchScreenerDataProvider:
                     logger.warning("fetch board stocks failed for %s: %s", board.board_code, e)
                     continue
                 for it in items:
+                    symbol = self._item_value(it, "symbol")
+                    name = self._item_value(it, "name")
                     self._upsert(
                         rows,
                         ScreenerStock(
-                            symbol=str(it.symbol or "").strip(),
+                            symbol=str(symbol or "").strip(),
                             market="CN",
-                            name=str(it.name or "").strip(),
+                            name=str(name or "").strip(),
                             board_code=str(board.board_code or "").strip(),
                             board_name=str(board.board_name or "").strip(),
                             sources=["watched_board"],
@@ -130,6 +132,11 @@ class PanWatchScreenerDataProvider:
                         break
 
         return list(rows.values())[:limit]
+
+    def _item_value(self, item, key: str):
+        if isinstance(item, dict):
+            return item.get(key)
+        return getattr(item, key, None)
 
     def _upsert(self, rows: dict[str, ScreenerStock], stock: ScreenerStock) -> None:
         if not stock.symbol:
