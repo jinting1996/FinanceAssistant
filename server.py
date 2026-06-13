@@ -1341,18 +1341,41 @@ from src.web.app import app  # noqa: E402
 app.router.lifespan_context = lifespan
 
 # 生产环境静态文件服务
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
-    from fastapi.staticfiles import StaticFiles
+root_dir = os.path.dirname(__file__)
+static_candidates = [
+    os.path.join(root_dir, "static"),
+    # 非 Docker 部署时,`pnpm build` 默认输出到 frontend/dist。
+    os.path.join(root_dir, "frontend", "dist"),
+]
+static_dir = next(
+    (
+        path
+        for path in static_candidates
+        if os.path.exists(os.path.join(path, "index.html"))
+    ),
+    "",
+)
+if static_dir:
     from fastapi.responses import FileResponse
+
+    def _static_response(path: str) -> FileResponse:
+        resp = FileResponse(path)
+        name = os.path.basename(path)
+        if name == "index.html":
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        elif "/assets/" in path.replace("\\", "/"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     # SPA 路由：所有非 API 请求返回 index.html
     @app.get("/{path:path}")
     async def serve_spa(path: str):
         file_path = os.path.join(static_dir, path)
         if os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(static_dir, "index.html"))
+            return _static_response(file_path)
+        return _static_response(os.path.join(static_dir, "index.html"))
 
     logger.info(f"静态文件服务已启用: {static_dir}")
 
