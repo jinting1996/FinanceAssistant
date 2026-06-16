@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from src.web.database import get_db
 from src.web.models import AIService, AIModel
 from src.core.ai_client import AIClient
+from src.core.mcp_datasource import mcp_datasource_catalog
 
 router = APIRouter()
 
@@ -12,6 +13,8 @@ router = APIRouter()
 @router.get("/catalog")
 def provider_catalog(type: str = ""):
     kind = (type or "").strip().lower()
+    if kind == "mcp":
+        return mcp_datasource_catalog()
     if kind and kind != "screener":
         return {"items": []}
     return {

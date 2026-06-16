@@ -8,6 +8,17 @@ import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 
+interface McpProviderItem {
+  provider: string
+  label: string
+  enabled: boolean
+  priority: number
+  capabilities: string[]
+  description: string
+  config_schema: Record<string, unknown>
+  status: string
+}
+
 interface TestLogItem {
   timestamp: string
   source_name: string
@@ -72,13 +83,18 @@ export default function DataSourcesPage() {
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testResultOpen, setTestResultOpen] = useState(false)
   const [testSymbolsInput, setTestSymbolsInput] = useState('')
+  const [mcpProviders, setMcpProviders] = useState<McpProviderItem[]>([])
 
   const { toast } = useToast()
 
   const load = async () => {
     try {
-      const data = await fetchAPI<DataSource[]>('/datasources')
+      const [data, mcp] = await Promise.all([
+        fetchAPI<DataSource[]>('/datasources'),
+        fetchAPI<{ items: McpProviderItem[] }>('/providers/catalog?type=mcp').catch(() => ({ items: [] })),
+      ])
       setSources(data)
+      setMcpProviders(mcp.items || [])
     } catch (e) {
       console.error(e)
       toast('加载数据源失败', 'error')
@@ -182,6 +198,39 @@ export default function DataSourcesPage() {
       </div>
 
       <div className="space-y-6">
+        {mcpProviders.length > 0 && (
+          <section className="card p-4 md:p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Layers className="w-4 h-4 text-primary" />
+              <h3 className="text-[13px] font-semibold text-foreground">MCP 增强数据源</h3>
+              <span className="text-[11px] text-muted-foreground ml-auto">{mcpProviders.length} 个预留 provider</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {mcpProviders.map(provider => (
+                <div key={provider.provider} className="rounded-xl border border-border/70 bg-accent/20 p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[13px] font-medium text-foreground">{provider.label}</div>
+                      <div className="text-[11px] text-muted-foreground font-mono">{provider.provider}</div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600">
+                      {provider.status === 'reserved' ? '预留' : provider.status}
+                    </span>
+                  </div>
+                  <p className="text-[12px] text-muted-foreground mt-2 leading-relaxed">{provider.description}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {provider.capabilities.map(cap => (
+                      <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded bg-background text-muted-foreground border border-border/60">
+                        {cap}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {Object.entries(DATASOURCE_TYPES).map(([type, { label, icon: Icon, color }]) => (
           <section key={type} className="card p-4 md:p-6">
             <div className="flex items-center gap-2 mb-4">

@@ -145,6 +145,48 @@ make dev-web
 </details>
 
 <details>
+<summary>WSL 部署代理说明</summary>
+
+如果在 WSL 中部署，并且宿主机开启了本地代理，不要在 WSL 里直接配置 `http://127.0.0.1:端口`。  
+在 WSL 内部，`127.0.0.1` 指向的是 WSL 自己，不是 Windows 宿主机；这会导致东方财富等外部数据源直连失败，持仓页分时图 / 5 分钟 K 线可能显示 `empty data`。
+
+建议先在 WSL 中查看宿主机地址：
+
+```bash
+cat /etc/resolv.conf | grep nameserver
+```
+
+假设输出为：
+
+```text
+nameserver 172.24.112.1
+```
+
+则代理应配置为：
+
+```bash
+export HTTP_PROXY=http://172.24.112.1:8897
+export HTTPS_PROXY=http://172.24.112.1:8897
+```
+
+或者在 `.env` / UI「设置 → 全局 HTTP 代理」中填写：
+
+```text
+http://172.24.112.1:8897
+```
+
+可用下面的命令在 WSL 内验证东方财富 A 股分钟 K 线是否能访问：
+
+```bash
+curl -x http://172.24.112.1:8897 \
+'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&klt=1&fqt=1&lmt=5&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56&ut=fa5fd1943c7b386f172d6893dbfba10b'
+```
+
+如果返回内容中包含 `klines`，说明东财分钟线可用；如果连接失败或返回空，需要先修正 WSL 到宿主机代理的连通性。
+
+</details>
+
+<details>
 <summary>首次配置</summary>
 
 1. 访问 Web 界面，设置登录账号

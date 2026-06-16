@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.providers import ProviderRequest, get_quote_orchestrator
+from src.core.strategy_pool import resolve_enabled_strategy_codes_for_paper
 from src.core.trade_rules import get_trade_rules
 from src.models.market import MarketCode, MARKETS
 from src.web.database import SessionLocal
@@ -18,12 +20,15 @@ from src.web.models import (
     PaperTradingAccount,
     PaperTradingPosition,
     PaperTradingTrade,
+    AppSettings,
+    StrategyCatalog,
     StrategySignalRun,
 )
 
 logger = logging.getLogger(__name__)
 
 FIXED_QUANTITY = 100
+SKIP_STATS_KEY = "paper_trading_last_skip_stats"
 
 
 def _utc_now() -> datetime:
@@ -62,6 +67,76 @@ def _rule_float(rules: dict | None, path: str, default: float) -> float:
         return float(node)
     except Exception:
         return float(default)
+
+
+def _aware(dt: datetime | None) -> datetime | None:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _strategy_config_map(db: Session, codes: set[str]) -> dict[str, dict]:
+    if not codes:
+        return {}
+    rows = db.query(StrategyCatalog).filter(StrategyCatalog.code.in_(list(codes))).all()
+    return {row.code: (row.run_config or {}) for row in rows if row.code}
+
+
+def _config_float(config: dict | None, key: str, default: float) -> float:
+    try:
+        return float((config or {}).get(key, default))
+    except Exception:
+        return float(default)
+
+
+def _position_quantity(*, market: str, price: float, available_cash: float, config: dict | None) -> int:
+    pct = max(0.001, min(_config_float(config, "position_pct", 0.05), 1.0))
+    budget = min(available_cash, available_cash * pct)
+    if budget <= 0 or price <= 0:
+        return 0
+    raw = int(budget // price)
+    if market == "CN":
+        return (raw // 100) * 100
+    return max(0, raw)
+
+
+def _skip_event(skip_events: list[dict], sig: StrategySignalRun, reason: str, detail: str = "") -> None:
+    skip_events.append(
+        {
+            "strategy_code": sig.strategy_code or "",
+            "stock_symbol": sig.stock_symbol or "",
+            "stock_market": sig.stock_market or "",
+            "stock_name": sig.stock_name or sig.stock_symbol or "",
+            "reason": reason,
+            "detail": detail,
+        }
+    )
+
+
+def _persist_skip_stats(db: Session, skip_events: list[dict]) -> dict:
+    by_reason: dict[str, int] = {}
+    by_strategy: dict[str, int] = {}
+    for evt in skip_events:
+        reason = str(evt.get("reason") or "unknown")
+        code = str(evt.get("strategy_code") or "unknown")
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        by_strategy[code] = by_strategy.get(code, 0) + 1
+    payload = {
+        "total": len(skip_events),
+        "by_reason": by_reason,
+        "by_strategy": by_strategy,
+        "samples": skip_events[:80],
+        "updated_at": _utc_now().isoformat(timespec="seconds"),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    row = db.query(AppSettings).filter(AppSettings.key == SKIP_STATS_KEY).first()
+    if row:
+        row.value = raw
+    else:
+        db.add(AppSettings(key=SKIP_STATS_KEY, value=raw, description="模拟盘最近一次跳过原因统计"))
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +315,9 @@ class PaperTradingEngine:
 
     def _check_entries(
         self, db: Session, account: PaperTradingAccount,
-    ) -> tuple[int, set[tuple[str, str]], list[tuple[PaperTradingPosition, StrategySignalRun | None]]]:
-        """检查可入场的策略信号，自动建仓。返回 (建仓数, 新建仓股票key集合, 建仓事件列表)。"""
+    ) -> tuple[int, set[tuple[str, str]], list[tuple[PaperTradingPosition, StrategySignalRun | None]], list[dict]]:
+        """检查可入场的策略信号，自动建仓。返回 (建仓数, 新建仓股票key集合, 建仓事件列表, 跳过事件)。"""
+        skip_events: list[dict] = []
         # 查询最新活跃买入信号
         query = (
             db.query(StrategySignalRun)
@@ -252,6 +328,7 @@ class PaperTradingEngine:
                 StrategySignalRun.entry_high.isnot(None),
             )
         )
+        selected_codes = resolve_enabled_strategy_codes_for_paper(db)
         # 按投资比例排除不投入（比例为 0）的市场
         alloc = market_allocations_or_default(account)
         excluded = [m for m in ALL_MARKETS if alloc.get(m, 0.0) <= 0]
@@ -261,7 +338,7 @@ class PaperTradingEngine:
         entry_events: list[tuple[PaperTradingPosition, StrategySignalRun | None]] = []
         new_keys: set[tuple[str, str]] = set()
         if not signals:
-            return 0, new_keys, entry_events
+            return 0, new_keys, entry_events, skip_events
 
         # 已有 open position 的股票
         open_keys = set()
@@ -277,16 +354,21 @@ class PaperTradingEngine:
         candidates = []
         seen = set()
         for sig in signals:
+            if selected_codes is not None and str(sig.strategy_code or "") not in selected_codes:
+                _skip_event(skip_events, sig, "strategy_not_selected", "该策略未被模拟盘策略选择启用")
+                continue
             key = (sig.stock_symbol, sig.stock_market)
             if key in open_keys:
+                _skip_event(skip_events, sig, "existing_position", "已有模拟盘持仓")
                 continue
             if key in seen:
+                _skip_event(skip_events, sig, "duplicate_signal", "同股票已有更高排名信号")
                 continue
             seen.add(key)
             candidates.append(sig)
 
         if not candidates:
-            return 0, new_keys, entry_events
+            return 0, new_keys, entry_events, skip_events
 
         # 批量获取报价
         syms = [(s.stock_symbol, s.stock_market) for s in candidates]
@@ -297,24 +379,57 @@ class PaperTradingEngine:
         rules = get_trade_rules(db)
         stop_loss_pct = _rule_float(rules, "risk.paper_fallback_stop_loss_pct", 0.08)
         target_profit_pct = _rule_float(rules, "risk.paper_fallback_target_profit_pct", 0.15)
+        strategy_configs = _strategy_config_map(
+            db,
+            {str(sig.strategy_code or "") for sig in candidates if sig.strategy_code},
+        )
 
         opened = 0
         for sig in candidates:
+            config = strategy_configs.get(sig.strategy_code or "", {})
+            ttl_hours = _config_float(config, "signal_ttl_hours", 48.0)
+            sig_time = _aware(sig.updated_at or sig.created_at)
+            if ttl_hours > 0 and sig_time is not None:
+                age_hours = (_utc_now() - sig_time).total_seconds() / 3600.0
+                if age_hours > ttl_hours:
+                    _skip_event(skip_events, sig, "signal_expired", f"信号已过期 {age_hours:.1f}h")
+                    continue
             key = (sig.stock_market, sig.stock_symbol)
             quote = quotes.get(key)
             if not quote:
+                _skip_event(skip_events, sig, "no_quote", "行情不可用")
                 continue
             current_price = _safe_float(quote.get("current_price"))
             if current_price is None or current_price <= 0:
+                _skip_event(skip_events, sig, "invalid_price", "当前价无效")
+                continue
+            if sig.entry_low and current_price < sig.entry_low:
+                _skip_event(skip_events, sig, "below_entry_range", f"{current_price:.2f} < {sig.entry_low:.2f}")
+                continue
+            if sig.entry_high and current_price > sig.entry_high:
+                _skip_event(skip_events, sig, "above_entry_range", f"{current_price:.2f} > {sig.entry_high:.2f}")
                 continue
 
             # 用当前市价入场
-            entry_price = current_price
-            cost = entry_price * FIXED_QUANTITY
+            slippage_pct = max(0.0, _config_float(config, "slippage_pct", 0.0))
+            fee_pct = max(0.0, _config_float(config, "fee_pct", 0.0))
+            entry_price = round(current_price * (1 + slippage_pct), 4)
             mkt = sig.stock_market
             if alloc.get(mkt, 0.0) <= 0:
+                _skip_event(skip_events, sig, "market_disabled", "该市场投资比例为 0")
                 continue  # 该市场比例为 0，不投入
+            quantity = _position_quantity(
+                market=mkt,
+                price=entry_price,
+                available_cash=market_cash.get(mkt, 0.0),
+                config=config,
+            )
+            if quantity <= 0:
+                _skip_event(skip_events, sig, "quantity_too_small", "按仓位计算不足最小交易单位")
+                continue
+            cost = entry_price * quantity * (1 + fee_pct)
             if cost > market_cash.get(mkt, 0.0):
+                _skip_event(skip_events, sig, "insufficient_cash", "该市场子池额度不足")
                 continue  # 该市场子池额度不足
 
             # 基于入场价计算止损/止盈
@@ -340,7 +455,7 @@ class PaperTradingEngine:
                 stock_symbol=sig.stock_symbol,
                 stock_market=sig.stock_market,
                 stock_name=sig.stock_name or "",
-                quantity=FIXED_QUANTITY,
+                quantity=quantity,
                 entry_price=entry_price,
                 stop_loss=stop_loss,
                 target_price=target_price,
@@ -371,7 +486,7 @@ class PaperTradingEngine:
 
         if opened > 0:
             db.commit()
-        return opened, new_keys, entry_events
+        return opened, new_keys, entry_events, skip_events
 
     def _close_position(
         self,
@@ -383,7 +498,13 @@ class PaperTradingEngine:
     ) -> PaperTradingTrade:
         """平仓单个持仓，返回交易记录。"""
         now = _utc_now()
-        pnl = (exit_price - pos.entry_price) * pos.quantity
+        config = _strategy_config_map(db, {pos.strategy_code or ""}).get(pos.strategy_code or "", {})
+        fee_pct = max(0.0, _config_float(config, "fee_pct", 0.0))
+        tax_pct = max(0.0, _config_float(config, "tax_pct", 0.0))
+        slippage_pct = max(0.0, _config_float(config, "slippage_pct", 0.0))
+        exit_price = round(exit_price * (1 - slippage_pct), 4)
+        fees = (pos.entry_price * pos.quantity * fee_pct) + (exit_price * pos.quantity * (fee_pct + tax_pct))
+        pnl = (exit_price - pos.entry_price) * pos.quantity - fees
         pnl_pct = ((exit_price - pos.entry_price) / pos.entry_price * 100) if pos.entry_price > 0 else 0.0
 
         holding_days = 0
@@ -418,7 +539,8 @@ class PaperTradingEngine:
         pos.unrealized_pnl = pnl
 
         # 回收资金
-        account.current_capital += exit_price * pos.quantity
+        sell_cost = exit_price * pos.quantity * (fee_pct + tax_pct)
+        account.current_capital += exit_price * pos.quantity - sell_cost
         account.total_pnl += pnl
         account.total_trades += 1
         if pnl > 0:
@@ -533,8 +655,10 @@ class PaperTradingEngine:
             if not account.enabled:
                 return {"status": "disabled"}
 
-            opened, new_keys, entry_events = self._check_entries(db, account)
+            opened, new_keys, entry_events, skip_events = self._check_entries(db, account)
             closed, exit_events = self._check_exits(db, account, skip_keys=new_keys)
+            skip_stats = _persist_skip_stats(db, skip_events)
+            db.commit()
 
             # 在 db.close() 前将 ORM 对象序列化为 dict，避免 detached 问题
             serialized_entries = [
@@ -550,6 +674,8 @@ class PaperTradingEngine:
                 "status": "ok",
                 "opened": opened,
                 "closed": closed,
+                "skipped": len(skip_events),
+                "skip_stats": skip_stats,
                 "entry_events": serialized_entries,
                 "exit_events": serialized_exits,
             }

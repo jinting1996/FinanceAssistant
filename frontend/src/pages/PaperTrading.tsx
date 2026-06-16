@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
+import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal, ListChecks } from 'lucide-react'
 import {
   paperTradingApi,
   type PaperTradingAccountResponse,
@@ -9,6 +9,9 @@ import {
   type StrategyPerformanceItem,
   type NotifyChannelItem,
   type MarketView,
+  type PaperTradingStrategySelection,
+  type PaperTradingStrategySelectionResponse,
+  type PaperTradingMetricsResponse,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
@@ -20,6 +23,20 @@ const EXIT_REASON_MAP: Record<string, string> = {
   target_price: '止盈',
   signal_reversal: '信号反转',
   manual: '手动平仓',
+}
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  strategy_not_selected: '策略未选中',
+  existing_position: '已有持仓',
+  duplicate_signal: '信号已处理',
+  no_quote: '缺行情',
+  invalid_price: '价格无效',
+  below_entry_range: '低于入场区间',
+  above_entry_range: '高于入场区间',
+  market_disabled: '市场未分配资金',
+  quantity_too_small: '仓位不足一手',
+  insufficient_cash: '资金不足',
+  signal_expired: '信号过期',
 }
 
 function formatCurrency(v: number) {
@@ -36,6 +53,23 @@ function PnlPctText({ value }: { value: number }) {
   const color = value > 0 ? 'text-rose-500' : value < 0 ? 'text-emerald-500' : 'text-muted-foreground'
   const prefix = value > 0 ? '+' : ''
   return <span className={color}>{prefix}{value.toFixed(2)}%</span>
+}
+
+function ExitReasonSummary({ counts }: { counts?: Record<string, number> }) {
+  const entries = Object.entries(counts || {})
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+  if (entries.length === 0) return <span className="text-muted-foreground">-</span>
+  return (
+    <div className="flex flex-wrap justify-end gap-1">
+      {entries.map(([reason, count]) => (
+        <span key={reason} className="text-[11px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">
+          {EXIT_REASON_MAP[reason] || reason} {count}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 function EquityChart({ data }: { data: EquityCurvePoint[] }) {
@@ -111,6 +145,7 @@ export default function PaperTradingPage() {
   const [tradesTotal, setTradesTotal] = useState(0)
   const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([])
   const [strategyPerf, setStrategyPerf] = useState<StrategyPerformanceItem[]>([])
+  const [skipStats, setSkipStats] = useState<PaperTradingMetricsResponse['skip_stats'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [tradesPage, setTradesPage] = useState(0)
@@ -137,6 +172,12 @@ export default function PaperTradingPage() {
   const [notifySaving, setNotifySaving] = useState(false)
   const [notifyTesting, setNotifyTesting] = useState(false)
 
+  // 策略选择
+  const [strategyOpen, setStrategyOpen] = useState(false)
+  const [strategySelection, setStrategySelection] = useState<PaperTradingStrategySelection>({ mode: 'all', strategy_codes: [], top_n: 5 })
+  const [strategyPool, setStrategyPool] = useState<PaperTradingStrategySelectionResponse['strategy_pool']>([])
+  const [strategySaving, setStrategySaving] = useState(false)
+
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
@@ -153,6 +194,7 @@ export default function PaperTradingPage() {
       setTradesTotal(tradeData.total)
       setEquityCurve(metrics.equity_curve)
       setStrategyPerf(metrics.strategy_performance || [])
+      setSkipStats(metrics.skip_stats || null)
     } catch {
       toast('加载失败', 'error')
     } finally {
@@ -276,6 +318,41 @@ export default function PaperTradingPage() {
     await loadNotifySettings()
   }
 
+  const handleOpenStrategySelection = async () => {
+    setStrategyOpen(true)
+    try {
+      const data = await paperTradingApi.getStrategySelection()
+      setStrategySelection(data.selection)
+      setStrategyPool(data.strategy_pool || [])
+    } catch {
+      toast('加载策略选择失败', 'error')
+    }
+  }
+
+  const handleSaveStrategySelection = async () => {
+    setStrategySaving(true)
+    try {
+      const data = await paperTradingApi.updateStrategySelection(strategySelection)
+      setStrategySelection(data.selection)
+      setStrategyPool(data.strategy_pool || [])
+      setStrategyOpen(false)
+      toast('策略选择已保存', 'success')
+    } catch {
+      toast('保存策略选择失败', 'error')
+    } finally {
+      setStrategySaving(false)
+    }
+  }
+
+  const toggleStrategyCode = (code: string) => {
+    setStrategySelection(prev => {
+      const set = new Set(prev.strategy_codes || [])
+      if (set.has(code)) set.delete(code)
+      else set.add(code)
+      return { ...prev, strategy_codes: Array.from(set) }
+    })
+  }
+
   const handleSaveNotify = async () => {
     setNotifySaving(true)
     try {
@@ -345,6 +422,10 @@ export default function PaperTradingPage() {
           <Button variant="outline" size="sm" className="h-8" onClick={handleOpenNotify}>
             <Bell className="w-3.5 h-3.5" />
             <span className="hidden sm:inline ml-1">通知</span>
+          </Button>
+          <Button variant="outline" size="sm" className="h-8" onClick={handleOpenStrategySelection}>
+            <ListChecks className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline ml-1">策略</span>
           </Button>
           <Button variant="outline" size="sm" className="h-8" onClick={handleScan} disabled={scanning}>
             <Play className="w-3.5 h-3.5 mr-1" />
@@ -463,6 +544,8 @@ export default function PaperTradingPage() {
                   <th className="text-right py-2 px-2">平均盈亏%</th>
                   <th className="text-right py-2 px-2">平均持仓天数</th>
                   <th className="text-right py-2 px-2">持仓中</th>
+                  <th className="text-right py-2 px-2">跳过</th>
+                  <th className="text-right py-2 px-2">退出原因</th>
                   <th className="text-right py-2 pl-2">浮动盈亏</th>
                 </tr>
               </thead>
@@ -482,6 +565,8 @@ export default function PaperTradingPage() {
                     <td className="text-right py-2 px-2"><PnlPctText value={s.avg_pnl_pct} /></td>
                     <td className="text-right py-2 px-2">{s.total_trades > 0 ? `${s.avg_holding_days}天` : '-'}</td>
                     <td className="text-right py-2 px-2">{s.open_positions > 0 ? s.open_positions : '-'}</td>
+                    <td className="text-right py-2 px-2">{s.skipped_count ? s.skipped_count : '-'}</td>
+                    <td className="text-right py-2 px-2"><ExitReasonSummary counts={s.exit_reason_counts} /></td>
                     <td className="text-right py-2 pl-2">
                       {s.open_positions > 0 ? <PnlText value={s.unrealized_pnl} /> : '-'}
                     </td>
@@ -489,6 +574,19 @@ export default function PaperTradingPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {(skipStats?.total ?? 0) > 0 && (
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold mb-3">最近扫描跳过原因</h2>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(skipStats?.by_reason || {}).map(([reason, count]) => (
+              <span key={reason} className="text-xs px-2.5 py-1 rounded-full bg-accent text-muted-foreground">
+                {SKIP_REASON_LABELS[reason] || reason}: {String(count)}
+              </span>
+            ))}
           </div>
         </div>
       )}
@@ -684,6 +782,99 @@ export default function PaperTradingPage() {
       </Dialog>
 
       {/* 跟单通知设置对话框 */}
+      <Dialog open={strategyOpen} onOpenChange={setStrategyOpen}>
+        <DialogContent className="max-w-2xl max-h-[82vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>模拟盘策略选择</DialogTitle>
+            <DialogDescription>控制下一次扫描使用哪些策略池策略。未选择时可保持全部启用策略兼容模式。</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                ['all', '全部启用'],
+                ['top_n', 'Top N'],
+                ['custom', '自定义'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => setStrategySelection(prev => ({ ...prev, mode }))}
+                  className={`h-9 rounded-lg text-sm font-medium transition-all ${
+                    strategySelection.mode === mode
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-accent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {strategySelection.mode === 'top_n' && (
+              <label className="block text-sm space-y-1">
+                <span className="text-muted-foreground">Top N 数量</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={strategySelection.top_n}
+                  onChange={e => setStrategySelection(prev => ({ ...prev, top_n: Number(e.target.value) || 1 }))}
+                  className="w-28 h-9 px-2 rounded-lg border border-border bg-background text-sm"
+                />
+              </label>
+            )}
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">策略池</div>
+              {strategyPool.length === 0 ? (
+                <div className="text-sm text-muted-foreground py-6 text-center">暂无策略池策略</div>
+              ) : (
+                <div className="space-y-2">
+                  {strategyPool.map(strategy => {
+                    const selected = (strategySelection.strategy_codes || []).includes(strategy.code)
+                    const disabled = strategySelection.mode !== 'custom'
+                    return (
+                      <button
+                        key={strategy.code}
+                        disabled={disabled}
+                        onClick={() => toggleStrategyCode(strategy.code)}
+                        className={`w-full flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-all ${
+                          selected && strategySelection.mode === 'custom'
+                            ? 'border-primary/40 bg-primary/8'
+                            : 'border-border bg-background hover:bg-accent/40'
+                        } ${disabled ? 'opacity-75 cursor-default' : ''}`}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{strategy.name}</div>
+                          <div className="text-xs text-muted-foreground font-mono truncate">{strategy.code}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {strategy.ranking?.score != null && (
+                            <span className="text-xs text-muted-foreground">{Number(strategy.ranking.score).toFixed(1)}</span>
+                          )}
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${strategy.enabled ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
+                            {strategy.enabled ? '启用' : '停用'}
+                          </span>
+                          {strategySelection.mode === 'custom' && (
+                            <span className={`w-4 h-4 rounded border ${selected ? 'bg-primary border-primary' : 'border-border'}`} />
+                          )}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <Button size="sm" onClick={handleSaveStrategySelection} disabled={strategySaving}>
+                {strategySaving ? '保存中...' : '保存'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={notifyOpen} onOpenChange={setNotifyOpen}>
         <DialogContent>
           <DialogHeader>

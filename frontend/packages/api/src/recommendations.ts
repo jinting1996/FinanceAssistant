@@ -114,6 +114,25 @@ export interface StrategyCatalogItem {
   risk_level: string
   params: Record<string, any>
   default_weight: number
+  strategy_type?: 'builtin' | 'screener_formula' | 'mcp' | 'agent'
+  source_ref_type?: string
+  source_ref_id?: number | null
+  run_config?: Record<string, any>
+  auto_run_enabled?: boolean
+  ranking?: StrategyPoolRanking
+}
+
+export interface StrategyPoolRanking {
+  strategy_code?: string
+  score?: number
+  sample_size?: number
+  insufficient_samples?: boolean
+  status_label?: string
+  win_rate?: number
+  avg_return_pct?: number
+  total_pnl?: number
+  max_drawdown_pct?: number
+  recent_30d_return_pct?: number
 }
 
 export interface StrategySignalItem {
@@ -469,6 +488,31 @@ export const recommendationsApi = {
     fetchAPI<{ items: StrategyCatalogItem[] }>(
       `/recommendations/strategy-catalog?enabled_only=${enabledOnly ? 'true' : 'false'}`
     ),
+
+  listStrategyPool: (enabledOnly = false) =>
+    fetchAPI<{ items: StrategyCatalogItem[] }>(
+      `/recommendations/strategy-pool?enabled_only=${enabledOnly ? 'true' : 'false'}`
+    ),
+
+  updateStrategyPoolItem: (code: string, payload: Partial<StrategyCatalogItem>) =>
+    fetchAPI<StrategyCatalogItem>(`/recommendations/strategy-pool/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  registerScreenerStrategy: (formulaId: number, runConfig?: Record<string, any>) =>
+    fetchAPI<StrategyCatalogItem>(`/recommendations/strategy-pool/from-screener/${encodeURIComponent(String(formulaId))}`, {
+      method: 'POST',
+      body: JSON.stringify({ run_config: runConfig || {} }),
+    }),
+
+  listStrategyRanking: () =>
+    fetchAPI<{ items: StrategyCatalogItem[] }>('/recommendations/strategy-pool/ranking'),
+
+  recalculateStrategyRanking: () =>
+    fetchAPI<{ items: StrategyCatalogItem[] }>('/recommendations/strategy-pool/recalculate-ranking', {
+      method: 'POST',
+    }),
 
   listStrategySignals: (params?: {
     market?: string

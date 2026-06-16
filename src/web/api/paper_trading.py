@@ -2,9 +2,10 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
@@ -12,10 +13,18 @@ from src.config import Settings
 from src.core.paper_trading_engine import (
     ALL_MARKETS,
     ENGINE,
+    SKIP_STATS_KEY,
     compute_market_cash,
     market_allocations_or_default,
     normalize_allocations,
 )
+from src.core.strategy_pool import (
+    get_paper_strategy_selection,
+    list_strategy_pool,
+    register_screener_strategy,
+    save_paper_strategy_selection,
+)
+from src.core.trade_rules import get_trade_rules
 from src.web.database import get_db
 from src.web.models import (
     AppSettings,
@@ -23,6 +32,10 @@ from src.web.models import (
     PaperTradingAccount,
     PaperTradingPosition,
     PaperTradingTrade,
+    StockScreenerFormula,
+    StockScreenerResult,
+    StockScreenerRun,
+    StrategySignalRun,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +63,81 @@ class UpdateSettingsBody(BaseModel):
     excluded_markets: list[str] | None = None  # 兼容旧字段
     market_allocations: dict[str, float] | None = None  # {"CN":0.5,...}，合计 ≤ 1
     initial_capital: float | None = None  # 总资金（>0 时按差额增/减资）
+
+
+class ScreenerStrategyBody(BaseModel):
+    run_id: int | None = None
+    formula_id: int | None = None
+    max_results: int = Field(default=20, ge=1, le=100)
+    min_change_pct: float | None = None
+    trigger_scan: bool = True
+
+
+class StrategySelectionBody(BaseModel):
+    mode: str = "all"
+    strategy_codes: list[str] = []
+    top_n: int = 5
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _rule_float(rules: dict | None, path: str, default: float) -> float:
+    node: Any = rules or {}
+    try:
+        for part in path.split("."):
+            node = node[part]
+        return float(node)
+    except Exception:
+        return float(default)
+
+
+def _strategy_code_for_screener(run: StockScreenerRun) -> str:
+    return f"screener:{run.formula_id or run.id}"
+
+
+def _strategy_name_for_screener(run: StockScreenerRun) -> str:
+    formula = run.formula
+    if formula and formula.name:
+        return f"选股策略: {formula.name}"
+    return f"选股策略 #{run.formula_id or run.id}"
+
+
+def _resolve_screener_run(db: Session, payload: ScreenerStrategyBody) -> StockScreenerRun:
+    if payload.run_id:
+        run = db.query(StockScreenerRun).filter(StockScreenerRun.id == payload.run_id).first()
+        if not run:
+            raise HTTPException(404, "选股运行记录不存在")
+        return run
+
+    if payload.formula_id:
+        formula = (
+            db.query(StockScreenerFormula)
+            .filter(StockScreenerFormula.id == payload.formula_id)
+            .first()
+        )
+        if not formula:
+            raise HTTPException(404, "选股公式不存在")
+        run = (
+            db.query(StockScreenerRun)
+            .filter(
+                StockScreenerRun.formula_id == formula.id,
+                StockScreenerRun.status == "success",
+            )
+            .order_by(StockScreenerRun.finished_at.desc(), StockScreenerRun.id.desc())
+            .first()
+        )
+        if not run:
+            raise HTTPException(400, "该公式还没有成功的选股结果，请先运行选股")
+        return run
+
+    raise HTTPException(400, "缺少 run_id 或 formula_id")
 
 
 def _serialize_account_dict(
@@ -233,6 +321,8 @@ def _account_summary(db: Session, acc: PaperTradingAccount, market: str | None) 
 
 def _strategy_performance(db: Session, market: str | None) -> list[dict]:
     """按策略聚合绩效（已平仓 + 持仓中），可按市场过滤。"""
+    skip_stats = _load_skip_stats(db)
+    skipped_by_strategy = skip_stats.get("by_strategy", {}) if isinstance(skip_stats, dict) else {}
     tq = db.query(PaperTradingTrade)
     if market:
         tq = tq.filter(PaperTradingTrade.stock_market == market)
@@ -252,11 +342,14 @@ def _strategy_performance(db: Session, market: str | None) -> list[dict]:
             "total_pnl": 0.0, "total_pnl_pct_sum": 0.0,
             "holding_days_sum": 0,
             "open_positions": 0, "unrealized_pnl": 0.0,
+            "exit_reason_counts": {},
         })
         s["total_trades"] += 1
         s["total_pnl"] += t.pnl
         s["total_pnl_pct_sum"] += t.pnl_pct
         s["holding_days_sum"] += t.holding_days or 0
+        reason = t.exit_reason or "unknown"
+        s["exit_reason_counts"][reason] = s["exit_reason_counts"].get(reason, 0) + 1
         if t.pnl > 0:
             s["winning_trades"] += 1
 
@@ -268,6 +361,7 @@ def _strategy_performance(db: Session, market: str | None) -> list[dict]:
             "total_pnl": 0.0, "total_pnl_pct_sum": 0.0,
             "holding_days_sum": 0,
             "open_positions": 0, "unrealized_pnl": 0.0,
+            "exit_reason_counts": {},
         })
         s["open_positions"] += 1
         s["unrealized_pnl"] += p.unrealized_pnl or 0
@@ -285,9 +379,29 @@ def _strategy_performance(db: Session, market: str | None) -> list[dict]:
             "avg_holding_days": round(s["holding_days_sum"] / n, 1) if n > 0 else 0,
             "open_positions": s["open_positions"],
             "unrealized_pnl": round(s["unrealized_pnl"], 2),
+            "skipped_count": int(skipped_by_strategy.get(s["strategy_code"], 0) or 0),
+            "exit_reason_counts": dict(sorted(
+                s["exit_reason_counts"].items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )),
         })
     strategy_perf.sort(key=lambda x: x["total_pnl"] + x["unrealized_pnl"], reverse=True)
     return strategy_perf
+
+
+def _load_skip_stats(db: Session) -> dict:
+    row = db.query(AppSettings).filter(AppSettings.key == SKIP_STATS_KEY).first()
+    fallback = {"total": 0, "by_reason": {}, "by_strategy": {}, "samples": []}
+    if not row or not row.value:
+        return fallback
+    try:
+        import json
+
+        data = json.loads(row.value)
+        return data if isinstance(data, dict) else fallback
+    except Exception:
+        return fallback
 
 
 def _position_response(p: PaperTradingPosition) -> dict:
@@ -395,7 +509,7 @@ def list_trades(limit: int = 50, offset: int = 0, market: str | None = None, db:
 def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
     acc = db.query(PaperTradingAccount).first()
     if not acc:
-        return {"account": None, "equity_curve": [], "open_positions": 0, "strategy_performance": []}
+        return {"account": None, "equity_curve": [], "open_positions": 0, "strategy_performance": [], "skip_stats": _load_skip_stats(db)}
 
     mkt = market if market in ALL_MARKETS else None
 
@@ -411,6 +525,7 @@ def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
         "equity_curve": equity_curve,
         "open_positions": open_count,
         "strategy_performance": _strategy_performance(db, mkt),
+        "skip_stats": _load_skip_stats(db),
     }
 
 
@@ -471,11 +586,169 @@ def update_settings(body: UpdateSettingsBody, db: Session = Depends(get_db)):
     return _account_summary(db, acc, None)
 
 
+@router.get("/strategy-selection")
+def get_strategy_selection(db: Session = Depends(get_db)):
+    return {
+        "selection": get_paper_strategy_selection(db),
+        "strategy_pool": list_strategy_pool(enabled_only=True).get("items", []),
+    }
+
+
+@router.post("/strategy-selection")
+def update_strategy_selection(body: StrategySelectionBody, db: Session = Depends(get_db)):
+    selection = save_paper_strategy_selection(body.model_dump(), db)
+    return {
+        "selection": selection,
+        "strategy_pool": list_strategy_pool(enabled_only=True).get("items", []),
+    }
+
+
 @router.post("/scan")
 async def manual_scan():
     """手动触发一次模拟盘扫描（建仓 + 平仓检查）。"""
     result = await ENGINE.scan_once()
     return result
+
+
+@router.post("/screener-strategy")
+async def create_signals_from_screener_strategy(
+    payload: ScreenerStrategyBody,
+    db: Session = Depends(get_db),
+):
+    """把一次选股运行结果转成模拟盘可执行的自定义策略信号。"""
+    run = _resolve_screener_run(db, payload)
+    if run.status != "success":
+        raise HTTPException(400, "只能使用成功完成的选股结果生成模拟盘信号")
+
+    query = (
+        db.query(StockScreenerResult)
+        .filter(StockScreenerResult.run_id == run.id, StockScreenerResult.matched == True)
+    )
+    if payload.min_change_pct is not None:
+        query = query.filter(StockScreenerResult.change_pct >= float(payload.min_change_pct))
+    results = (
+        query.order_by(
+            StockScreenerResult.change_pct.desc(),
+            StockScreenerResult.id.asc(),
+        )
+        .limit(payload.max_results)
+        .all()
+    )
+    if not results:
+        raise HTTPException(400, "本次选股没有可用于模拟盘的命中结果")
+
+    rules = get_trade_rules(db)
+    entry_band_pct = _rule_float(rules, "risk.entry_band_pct", 0.01)
+    stop_loss_pct = _rule_float(rules, "risk.paper_fallback_stop_loss_pct", 0.08)
+    target_profit_pct = _rule_float(rules, "risk.paper_fallback_target_profit_pct", 0.15)
+    snapshot = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if run.formula_id:
+        strategy_item = register_screener_strategy(
+            int(run.formula_id),
+            run_config={"max_results": payload.max_results},
+        )
+        strategy_code = strategy_item["code"]
+        strategy_name = strategy_item["name"]
+    else:
+        strategy_code = _strategy_code_for_screener(run)
+        strategy_name = _strategy_name_for_screener(run)
+    created = 0
+    updated = 0
+    skipped = 0
+
+    for idx, item in enumerate(results):
+        price = _safe_float(item.last_close)
+        if price is None or price <= 0:
+            skipped += 1
+            continue
+        change = _safe_float(item.change_pct) or 0.0
+        score = max(45.0, min(95.0, 72.0 + change))
+        rank_score = score + max(0.0, (len(results) - idx) * 0.01)
+        indicators = item.indicators if isinstance(item.indicators, dict) else {}
+        evidence = [
+            f"选股公式命中: {strategy_name}",
+            f"最近收盘价 {price:.2f}",
+        ]
+        if item.board_name:
+            evidence.append(f"来源板块: {item.board_name}")
+
+        row = (
+            db.query(StrategySignalRun)
+            .filter(
+                StrategySignalRun.snapshot_date == snapshot,
+                StrategySignalRun.stock_symbol == item.symbol,
+                StrategySignalRun.stock_market == item.market,
+                StrategySignalRun.strategy_code == strategy_code,
+                StrategySignalRun.source_pool == "screener",
+            )
+            .first()
+        )
+        if row:
+            updated += 1
+        else:
+            row = StrategySignalRun(
+                snapshot_date=snapshot,
+                stock_symbol=item.symbol,
+                stock_market=item.market,
+                strategy_code=strategy_code,
+                source_candidate_id=None,
+            )
+            db.add(row)
+            created += 1
+
+        row.stock_name = item.name or item.symbol
+        row.strategy_name = strategy_name
+        row.strategy_version = "screener-v1"
+        row.risk_level = "medium"
+        row.source_pool = "screener"
+        row.score = score
+        row.rank_score = rank_score
+        row.confidence = round(score / 100.0, 3)
+        row.status = "active"
+        row.action = "buy"
+        row.action_label = "自定义策略建仓"
+        row.signal = "选股公式命中"
+        row.reason = item.reason or "Formula matched on the latest trading day"
+        row.evidence = evidence
+        row.holding_days = 3
+        row.entry_low = round(price * (1 - entry_band_pct), 4)
+        row.entry_high = round(price * (1 + entry_band_pct), 4)
+        row.stop_loss = round(price * (1 - stop_loss_pct), 4)
+        row.target_price = round(price * (1 + target_profit_pct), 4)
+        row.invalidation = "选股条件失效或触发模拟盘止损/止盈"
+        row.plan_quality = 100
+        row.source_agent = "screener"
+        row.source_suggestion_id = None
+        row.trace_id = f"screener-run:{run.id}"
+        row.is_holding_snapshot = False
+        row.context_quality_score = None
+        row.payload = {
+            "source": "screener_strategy",
+            "screener_run_id": run.id,
+            "screener_formula_id": run.formula_id,
+            "formula_snapshot": run.formula_snapshot,
+            "board_code": item.board_code or "",
+            "board_name": item.board_name or "",
+            "indicators": indicators,
+            "change_pct": item.change_pct,
+        }
+        row.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    scan_result = None
+    if payload.trigger_scan and (created or updated):
+        scan_result = await ENGINE.scan_once()
+
+    return {
+        "ok": True,
+        "run_id": run.id,
+        "strategy_code": strategy_code,
+        "strategy_name": strategy_name,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "scan": scan_result,
+    }
 
 
 # ---------------------------------------------------------------------------

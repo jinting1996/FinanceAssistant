@@ -29,9 +29,11 @@ from src.web.api import (
     paper_trading,
     chat,
     market_events,
+    market_feed,
     screener,
     system,
     tasks,
+    backtests,
 )
 from src.web.api import insights
 from src.web.api.auth import get_current_user
@@ -182,9 +184,21 @@ app.include_router(
     dependencies=protected,
 )
 app.include_router(
+    market_feed.router,
+    prefix="/api/market-feed",
+    tags=["market-feed"],
+    dependencies=protected,
+)
+app.include_router(
     screener.router,
     prefix="/api/screener",
     tags=["screener"],
+    dependencies=protected,
+)
+app.include_router(
+    backtests.router,
+    prefix="/api/backtests",
+    tags=["backtests"],
     dependencies=protected,
 )
 app.include_router(

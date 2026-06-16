@@ -763,6 +763,11 @@ class StrategyCatalog(Base):
     risk_level = Column(String, default="medium")  # low/medium/high
     params = Column(JSON, default={})
     default_weight = Column(Float, nullable=False, default=1.0)
+    strategy_type = Column(String, nullable=False, default="builtin")
+    source_ref_type = Column(String, default="")
+    source_ref_id = Column(Integer, nullable=True)
+    run_config = Column(JSON, default={})
+    auto_run_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -1156,6 +1161,120 @@ class PaperTradingTrade(Base):
     opened_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, server_default=func.now())
     meta = Column(JSON, default={})
+
+
+class BacktestRun(Base):
+    """策略池回测运行记录。"""
+
+    __tablename__ = "backtest_runs"
+    __table_args__ = (
+        Index("ix_backtest_run_status_created", "status", "created_at"),
+        Index("ix_backtest_run_market_dates", "market", "start_date", "end_date"),
+    )
+
+    id = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="queued")
+    message = Column(Text, default="")
+    market = Column(String, nullable=False, default="CN")
+    start_date = Column(String, nullable=False, default="")
+    end_date = Column(String, nullable=False, default="")
+    initial_capital = Column(Float, nullable=False, default=1000000.0)
+    strategy_codes = Column(JSON, default=[])
+    params = Column(JSON, default={})
+    summary = Column(JSON, default={})
+    error = Column(Text, default="")
+    created_at = Column(DateTime, server_default=func.now())
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class BacktestTrade(Base):
+    """回测交易明细。"""
+
+    __tablename__ = "backtest_trades"
+    __table_args__ = (
+        Index("ix_backtest_trade_run", "run_id", "opened_at"),
+        Index("ix_backtest_trade_strategy", "strategy_code", "stock_market"),
+        Index("ix_backtest_trade_symbol", "stock_symbol", "stock_market"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
+    strategy_code = Column(String, nullable=False)
+    strategy_name = Column(String, default="")
+    strategy_type = Column(String, default="")
+    source_ref_id = Column(Integer, nullable=True)
+    signal_run_id = Column(Integer, nullable=True)
+    stock_symbol = Column(String, nullable=False)
+    stock_market = Column(String, nullable=False, default="CN")
+    stock_name = Column(String, default="")
+    quantity = Column(Integer, nullable=False, default=0)
+    entry_date = Column(String, nullable=False, default="")
+    exit_date = Column(String, nullable=False, default="")
+    entry_price = Column(Float, nullable=False, default=0.0)
+    exit_price = Column(Float, nullable=False, default=0.0)
+    stop_loss = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    pnl = Column(Float, nullable=False, default=0.0)
+    pnl_pct = Column(Float, nullable=False, default=0.0)
+    fees = Column(Float, nullable=False, default=0.0)
+    holding_days = Column(Integer, nullable=False, default=0)
+    exit_reason = Column(String, nullable=False, default="")
+    skipped = Column(Boolean, default=False)
+    skip_reason = Column(String, default="")
+    meta = Column(JSON, default={})
+    opened_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class BacktestDailyEquity(Base):
+    """回测每日权益曲线。"""
+
+    __tablename__ = "backtest_daily_equity"
+    __table_args__ = (
+        UniqueConstraint("run_id", "date", name="uq_backtest_equity_run_date"),
+        Index("ix_backtest_equity_run_date", "run_id", "date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
+    date = Column(String, nullable=False)
+    cash = Column(Float, nullable=False, default=0.0)
+    positions_value = Column(Float, nullable=False, default=0.0)
+    equity = Column(Float, nullable=False, default=0.0)
+    drawdown_pct = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class BacktestStrategyMetric(Base):
+    """回测按策略聚合绩效。"""
+
+    __tablename__ = "backtest_strategy_metrics"
+    __table_args__ = (
+        UniqueConstraint("run_id", "strategy_code", name="uq_backtest_metric_run_strategy"),
+        Index("ix_backtest_metric_strategy", "strategy_code", "run_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
+    strategy_code = Column(String, nullable=False)
+    strategy_name = Column(String, default="")
+    strategy_type = Column(String, default="")
+    stock_market = Column(String, default="CN")
+    total_trades = Column(Integer, nullable=False, default=0)
+    winning_trades = Column(Integer, nullable=False, default=0)
+    win_rate = Column(Float, nullable=False, default=0.0)
+    total_pnl = Column(Float, nullable=False, default=0.0)
+    total_return_pct = Column(Float, nullable=False, default=0.0)
+    avg_return_pct = Column(Float, nullable=False, default=0.0)
+    max_drawdown_pct = Column(Float, nullable=False, default=0.0)
+    recent_30d_return_pct = Column(Float, nullable=False, default=0.0)
+    sample_size = Column(Integer, nullable=False, default=0)
+    exit_reason_counts = Column(JSON, default={})
+    skip_reason_counts = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class ChatConversation(Base):

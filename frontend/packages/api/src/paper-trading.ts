@@ -87,6 +87,8 @@ export interface StrategyPerformanceItem {
   avg_holding_days: number
   open_positions: number
   unrealized_pnl: number
+  skipped_count?: number
+  exit_reason_counts?: Record<string, number>
 }
 
 export interface PaperTradingMetricsResponse {
@@ -94,6 +96,13 @@ export interface PaperTradingMetricsResponse {
   equity_curve: EquityCurvePoint[]
   open_positions: number
   strategy_performance: StrategyPerformanceItem[]
+  skip_stats?: {
+    total: number
+    by_reason: Record<string, number>
+    by_strategy: Record<string, number>
+    samples: Array<Record<string, any>>
+    updated_at?: string
+  }
 }
 
 export interface NotifyChannelItem {
@@ -112,6 +121,34 @@ export interface PaperTradingNotifySettings {
     pt_notify_summary: string
   }
   channels: NotifyChannelItem[]
+}
+
+export interface PaperTradingScreenerStrategyResponse {
+  ok: boolean
+  run_id: number
+  strategy_code: string
+  strategy_name: string
+  created: number
+  updated: number
+  skipped: number
+  scan?: { status: string; opened?: number; closed?: number } | null
+}
+
+export interface PaperTradingStrategySelection {
+  mode: 'all' | 'custom' | 'top_n'
+  strategy_codes: string[]
+  top_n: number
+}
+
+export interface PaperTradingStrategySelectionResponse {
+  selection: PaperTradingStrategySelection
+  strategy_pool: Array<{
+    code: string
+    name: string
+    enabled: boolean
+    strategy_type?: string
+    ranking?: Record<string, any>
+  }>
 }
 
 export const paperTradingApi = {
@@ -162,9 +199,31 @@ export const paperTradingApi = {
     }),
 
   scan: () =>
-    fetchAPI<{ status: string; opened: number; closed: number }>('/paper-trading/scan', {
+    fetchAPI<{ status: string; opened: number; closed: number; skipped?: number; skip_stats?: PaperTradingMetricsResponse['skip_stats'] }>('/paper-trading/scan', {
       method: 'POST',
       timeoutMs: 30000,
+    }),
+
+  createScreenerStrategy: (payload: {
+    run_id?: number
+    formula_id?: number
+    max_results?: number
+    min_change_pct?: number | null
+    trigger_scan?: boolean
+  }) =>
+    fetchAPI<PaperTradingScreenerStrategyResponse>('/paper-trading/screener-strategy', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      timeoutMs: 30000,
+    }),
+
+  getStrategySelection: () =>
+    fetchAPI<PaperTradingStrategySelectionResponse>('/paper-trading/strategy-selection'),
+
+  updateStrategySelection: (payload: PaperTradingStrategySelection) =>
+    fetchAPI<PaperTradingStrategySelectionResponse>('/paper-trading/strategy-selection', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   getNotifySettings: () =>

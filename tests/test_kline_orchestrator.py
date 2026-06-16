@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import unittest
 import asyncio
+import shutil
+import tempfile
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from src.core.providers.base import KlineProvider, ProviderRequest, ProviderResponse
 from src.core.providers.orchestrator import KlineOrchestrator
+from src.core import stock_kline_cache
+from src.web.database import Base
 
 
 class _MockKlineProvider(KlineProvider):
@@ -46,6 +53,20 @@ def _stub_sources(orch: KlineOrchestrator, names: list[str]) -> None:
 
 
 class TestKlineOrchestrator(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="kline-orch-")
+        engine = create_engine(
+            f"sqlite:///{self._tmpdir}/kline_cache.db",
+            connect_args={"check_same_thread": False},
+        )
+        Base.metadata.create_all(engine)
+        self._old_session_local = stock_kline_cache.SessionLocal
+        stock_kline_cache.SessionLocal = sessionmaker(bind=engine)
+
+    def tearDown(self):
+        stock_kline_cache.SessionLocal = self._old_session_local
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
     async def test_primary_succeeds_skip_backup(self):
         """K线主源成功 — 不调用备份"""
         orch = KlineOrchestrator()

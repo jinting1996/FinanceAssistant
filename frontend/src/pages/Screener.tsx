@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, CheckCircle2, Code2, Eye, LineChart, Loader2, Play, Plus, RefreshCw, Save, Search, Trash2 } from 'lucide-react'
 import {
   marketEventsApi,
+  paperTradingApi,
   screenerApi,
   stocksApi,
   type ScreenerFormulaItem,
@@ -106,6 +107,7 @@ export default function ScreenerPage() {
   const [selectedBoards, setSelectedBoards] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
+  const [sendingToPaper, setSendingToPaper] = useState(false)
   const [validating, setValidating] = useState(false)
   const [message, setMessage] = useState('')
   const [currentRun, setCurrentRun] = useState<ScreenerRunItem | null>(null)
@@ -260,6 +262,26 @@ export default function ScreenerPage() {
     } catch (e: any) {
       setMessage(e?.message || '启动筛选失败')
       setRunning(false)
+    }
+  }
+
+  const sendCurrentRunToPaper = async () => {
+    if (!currentRun || currentRun.status !== 'success' || !results.length || sendingToPaper) return
+    setSendingToPaper(true)
+    setMessage('')
+    try {
+      const res = await paperTradingApi.createScreenerStrategy({
+        run_id: currentRun.id,
+        max_results: Math.min(20, results.length),
+        trigger_scan: true,
+      })
+      const opened = res.scan?.opened ?? 0
+      const closed = res.scan?.closed ?? 0
+      setMessage(`已生成模拟盘策略 ${res.strategy_code}：新增 ${res.created} 条，更新 ${res.updated} 条，跳过 ${res.skipped} 条；本轮开仓 ${opened}，平仓 ${closed}`)
+    } catch (e: any) {
+      setMessage(e?.message || '生成模拟盘策略失败')
+    } finally {
+      setSendingToPaper(false)
     }
   }
 
@@ -478,7 +500,21 @@ export default function ScreenerPage() {
                   {currentRun?.duration_ms ? ` · ${currentRun.duration_ms}ms` : ''}
                 </div>
               </div>
-              {running && <div className="flex items-center gap-2 text-[12px] text-primary"><Loader2 className="h-4 w-4 animate-spin" /> 正在筛选</div>}
+              <div className="flex items-center gap-2">
+                {currentRun?.status === 'success' && results.length > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-8"
+                    onClick={sendCurrentRunToPaper}
+                    disabled={sendingToPaper}
+                  >
+                    {sendingToPaper ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                    模拟
+                  </Button>
+                )}
+                {running && <div className="flex items-center gap-2 text-[12px] text-primary"><Loader2 className="h-4 w-4 animate-spin" /> 正在筛选</div>}
+              </div>
             </div>
 
             {currentRun && currentRun.status !== 'success' && (

@@ -1713,6 +1713,198 @@ def _m120_screener_task_fields(conn: Connection) -> None:
     )
 
 
+def _m121_strategy_pool_fields(conn: Connection) -> None:
+    """Extend strategy catalog so built-in, screener, and MCP strategies share one pool."""
+
+    _add_column_if_missing(
+        conn,
+        "strategy_catalog",
+        "strategy_type",
+        "ALTER TABLE strategy_catalog ADD COLUMN strategy_type TEXT NOT NULL DEFAULT 'builtin'",
+    )
+    _add_column_if_missing(
+        conn,
+        "strategy_catalog",
+        "source_ref_type",
+        "ALTER TABLE strategy_catalog ADD COLUMN source_ref_type TEXT DEFAULT ''",
+    )
+    _add_column_if_missing(
+        conn,
+        "strategy_catalog",
+        "source_ref_id",
+        "ALTER TABLE strategy_catalog ADD COLUMN source_ref_id INTEGER",
+    )
+    _add_column_if_missing(
+        conn,
+        "strategy_catalog",
+        "run_config",
+        "ALTER TABLE strategy_catalog ADD COLUMN run_config TEXT DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        conn,
+        "strategy_catalog",
+        "auto_run_enabled",
+        "ALTER TABLE strategy_catalog ADD COLUMN auto_run_enabled INTEGER DEFAULT 0",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_strategy_catalog_type_enabled",
+        "CREATE INDEX ix_strategy_catalog_type_enabled ON strategy_catalog(strategy_type, enabled)",
+    )
+    conn.execute(
+        text(
+            """
+UPDATE strategy_catalog
+SET strategy_type = 'builtin'
+WHERE strategy_type IS NULL OR strategy_type = ''
+"""
+        )
+    )
+
+
+def _m122_backtest_tables(conn: Connection) -> None:
+    """Add persistent backtest runs, trades, equity curves, and strategy metrics."""
+
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'queued',
+    message TEXT DEFAULT '',
+    market TEXT NOT NULL DEFAULT 'CN',
+    start_date TEXT NOT NULL DEFAULT '',
+    end_date TEXT NOT NULL DEFAULT '',
+    initial_capital REAL NOT NULL DEFAULT 1000000.0,
+    strategy_codes JSON DEFAULT '[]',
+    params JSON DEFAULT '{}',
+    summary JSON DEFAULT '{}',
+    error TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    started_at DATETIME,
+    finished_at DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS backtest_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    strategy_code TEXT NOT NULL,
+    strategy_name TEXT DEFAULT '',
+    strategy_type TEXT DEFAULT '',
+    source_ref_id INTEGER,
+    signal_run_id INTEGER,
+    stock_symbol TEXT NOT NULL,
+    stock_market TEXT NOT NULL DEFAULT 'CN',
+    stock_name TEXT DEFAULT '',
+    quantity INTEGER NOT NULL DEFAULT 0,
+    entry_date TEXT NOT NULL DEFAULT '',
+    exit_date TEXT NOT NULL DEFAULT '',
+    entry_price REAL NOT NULL DEFAULT 0.0,
+    exit_price REAL NOT NULL DEFAULT 0.0,
+    stop_loss REAL,
+    target_price REAL,
+    pnl REAL NOT NULL DEFAULT 0.0,
+    pnl_pct REAL NOT NULL DEFAULT 0.0,
+    fees REAL NOT NULL DEFAULT 0.0,
+    holding_days INTEGER NOT NULL DEFAULT 0,
+    exit_reason TEXT NOT NULL DEFAULT '',
+    skipped INTEGER DEFAULT 0,
+    skip_reason TEXT DEFAULT '',
+    meta JSON DEFAULT '{}',
+    opened_at DATETIME,
+    closed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS backtest_daily_equity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    cash REAL NOT NULL DEFAULT 0.0,
+    positions_value REAL NOT NULL DEFAULT 0.0,
+    equity REAL NOT NULL DEFAULT 0.0,
+    drawdown_pct REAL NOT NULL DEFAULT 0.0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_backtest_equity_run_date UNIQUE(run_id, date)
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS backtest_strategy_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    strategy_code TEXT NOT NULL,
+    strategy_name TEXT DEFAULT '',
+    strategy_type TEXT DEFAULT '',
+    stock_market TEXT DEFAULT 'CN',
+    total_trades INTEGER NOT NULL DEFAULT 0,
+    winning_trades INTEGER NOT NULL DEFAULT 0,
+    win_rate REAL NOT NULL DEFAULT 0.0,
+    total_pnl REAL NOT NULL DEFAULT 0.0,
+    total_return_pct REAL NOT NULL DEFAULT 0.0,
+    avg_return_pct REAL NOT NULL DEFAULT 0.0,
+    max_drawdown_pct REAL NOT NULL DEFAULT 0.0,
+    recent_30d_return_pct REAL NOT NULL DEFAULT 0.0,
+    sample_size INTEGER NOT NULL DEFAULT 0,
+    exit_reason_counts JSON DEFAULT '{}',
+    skip_reason_counts JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_backtest_metric_run_strategy UNIQUE(run_id, strategy_code)
+)
+"""
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_run_status_created",
+        "CREATE INDEX ix_backtest_run_status_created ON backtest_runs(status, created_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_run_market_dates",
+        "CREATE INDEX ix_backtest_run_market_dates ON backtest_runs(market, start_date, end_date)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_trade_run",
+        "CREATE INDEX ix_backtest_trade_run ON backtest_trades(run_id, opened_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_trade_strategy",
+        "CREATE INDEX ix_backtest_trade_strategy ON backtest_trades(strategy_code, stock_market)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_trade_symbol",
+        "CREATE INDEX ix_backtest_trade_symbol ON backtest_trades(stock_symbol, stock_market)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_equity_run_date",
+        "CREATE INDEX ix_backtest_equity_run_date ON backtest_daily_equity(run_id, date)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_backtest_metric_strategy",
+        "CREATE INDEX ix_backtest_metric_strategy ON backtest_strategy_metrics(strategy_code, run_id)",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 历史（命令式）迁移 v1–v5
 #
@@ -1778,6 +1970,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(118, "paper_trading_market_allocations", _m118_paper_trading_market_allocations),
     Migration(119, "stock_screener_tables", _m119_stock_screener_tables),
     Migration(120, "screener_task_fields", _m120_screener_task_fields),
+    Migration(121, "strategy_pool_fields", _m121_strategy_pool_fields),
+    Migration(122, "backtest_tables", _m122_backtest_tables),
 )
 
 

@@ -27,6 +27,12 @@ from src.core.strategy_engine import (
     rebalance_strategy_weights,
     refresh_strategy_signals,
 )
+from src.core.strategy_pool import (
+    get_strategy_ranking,
+    list_strategy_pool,
+    register_screener_strategy,
+    update_strategy_pool_item,
+)
 from src.core.trade_rules import (
     get_default_trade_rules,
     get_trade_rules,
@@ -150,6 +156,21 @@ class TradeRulesIn(BaseModel):
     rules: dict = Field(default_factory=dict)
 
 
+class StrategyPoolUpdateIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+    risk_level: str | None = None
+    market_scope: str | None = None
+    default_weight: float | None = None
+    run_config: dict | None = None
+    auto_run_enabled: bool | None = None
+
+
+class ScreenerStrategyRegisterIn(BaseModel):
+    run_config: dict = Field(default_factory=dict)
+
+
 @router.get("/entry-candidates")
 def get_entry_candidates(
     market: str = Query("", description="市场代码: CN/HK/US"),
@@ -257,6 +278,42 @@ def evaluate_candidate_outcomes(
 @router.get("/strategy-catalog")
 def get_strategy_catalog(enabled_only: bool = Query(True, description="仅返回启用策略")):
     return {"items": list_strategy_catalog(enabled_only=enabled_only)}
+
+
+@router.get("/strategy-pool")
+def get_strategy_pool(enabled_only: bool = Query(False, description="仅返回启用策略")):
+    return list_strategy_pool(enabled_only=enabled_only)
+
+
+@router.put("/strategy-pool/{code:path}")
+def update_strategy_pool_api(code: str, payload: StrategyPoolUpdateIn):
+    try:
+        return update_strategy_pool_item(code, payload.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(404, "strategy not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/strategy-pool/from-screener/{formula_id}")
+def create_strategy_from_screener_api(formula_id: int, payload: ScreenerStrategyRegisterIn | None = None):
+    try:
+        return register_screener_strategy(
+            formula_id,
+            run_config=(payload.run_config if payload else {}),
+        )
+    except KeyError:
+        raise HTTPException(404, "formula not found")
+
+
+@router.get("/strategy-pool/ranking")
+def get_strategy_pool_ranking_api():
+    return get_strategy_ranking()
+
+
+@router.post("/strategy-pool/recalculate-ranking")
+def recalculate_strategy_pool_ranking_api():
+    return get_strategy_ranking()
 
 
 @router.get("/strategy-signals")

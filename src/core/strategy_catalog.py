@@ -19,6 +19,7 @@ class StrategySpec:
     risk_level: str = "medium"
     params: dict | None = None
     default_weight: float = 1.0
+    run_config: dict | None = None
 
 
 DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
@@ -103,10 +104,25 @@ def ensure_strategy_catalog() -> None:
                         risk_level=spec.risk_level,
                         params=spec.params or {},
                         default_weight=float(spec.default_weight),
+                        strategy_type="builtin",
+                        source_ref_type="",
+                        source_ref_id=None,
+                        run_config=spec.run_config or {},
+                        auto_run_enabled=False,
                     )
                 )
                 changed = True
                 continue
+            if not getattr(row, "strategy_type", None):
+                row.strategy_type = "builtin"
+                changed = True
+            if row.strategy_type == "builtin":
+                if row.source_ref_type:
+                    row.source_ref_type = ""
+                    changed = True
+                if row.source_ref_id is not None:
+                    row.source_ref_id = None
+                    changed = True
             if row.name != spec.name:
                 row.name = spec.name
                 changed = True
@@ -127,6 +143,9 @@ def ensure_strategy_catalog() -> None:
                 changed = True
             if not row.params:
                 row.params = spec.params or {}
+                changed = True
+            if row.run_config is None:
+                row.run_config = spec.run_config or {}
                 changed = True
         if changed:
             db.commit()
@@ -155,6 +174,11 @@ def list_strategy_catalog(enabled_only: bool = True) -> list[dict]:
                     "risk_level": r.risk_level or "medium",
                     "params": r.params or {},
                     "default_weight": float(r.default_weight or 1.0),
+                    "strategy_type": r.strategy_type or "builtin",
+                    "source_ref_type": r.source_ref_type or "",
+                    "source_ref_id": r.source_ref_id,
+                    "run_config": r.run_config or {},
+                    "auto_run_enabled": bool(r.auto_run_enabled),
                 }
             )
         return out
