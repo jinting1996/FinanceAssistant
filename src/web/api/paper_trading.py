@@ -254,6 +254,38 @@ def _build_equity_curve(
     return curve, peak, max_dd
 
 
+def _build_strategy_pnl_curve(
+    db: Session, strategy_code: str, market: str | None
+) -> list[dict]:
+    """按策略构建累计已实现盈亏曲线(从 0 起,按平仓日累加)。
+
+    单策略没有独立的资金分配口径,因此用累计盈亏(而非账户净值)表达,语义清晰。
+    """
+    tq = (
+        db.query(PaperTradingTrade)
+        .filter(PaperTradingTrade.strategy_code == strategy_code)
+        .order_by(PaperTradingTrade.closed_at.asc())
+    )
+    if market:
+        tq = tq.filter(PaperTradingTrade.stock_market == market)
+    by_date: dict[str, float] = {}
+    for t in tq.all():
+        if not t.closed_at:
+            continue
+        dt = t.closed_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        date_str = dt.strftime("%Y-%m-%d")
+        by_date[date_str] = by_date.get(date_str, 0.0) + (t.pnl or 0.0)
+
+    curve: list[dict] = []
+    running = 0.0
+    for date_str in sorted(by_date.keys()):
+        running += by_date[date_str]
+        curve.append({"date": date_str, "equity": round(running, 2)})
+    return curve
+
+
 def _account_summary(db: Session, acc: PaperTradingAccount, market: str | None) -> dict:
     """账户汇总。market=None 为全账户（沿用引擎维护的回撤）；否则按该市场子池口径。"""
     if not market or market not in ALL_MARKETS:
@@ -506,7 +538,11 @@ def list_trades(limit: int = 50, offset: int = 0, market: str | None = None, db:
 
 
 @router.get("/metrics")
-def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
+def get_metrics(
+    market: str | None = None,
+    strategy_code: str | None = None,
+    db: Session = Depends(get_db),
+):
     acc = db.query(PaperTradingAccount).first()
     if not acc:
         return {"account": None, "equity_curve": [], "open_positions": 0, "strategy_performance": [], "skip_stats": _load_skip_stats(db)}
@@ -518,11 +554,16 @@ def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
         pq = pq.filter(PaperTradingPosition.stock_market == mkt)
     open_count = pq.count()
 
-    equity_curve, _peak, _max_dd = _build_equity_curve(db, acc, mkt)
+    # 指定策略时返回该策略累计盈亏曲线;否则返回账户净值曲线
+    if strategy_code:
+        equity_curve = _build_strategy_pnl_curve(db, strategy_code, mkt)
+    else:
+        equity_curve, _peak, _max_dd = _build_equity_curve(db, acc, mkt)
 
     return {
         "account": _account_summary(db, acc, mkt),
         "equity_curve": equity_curve,
+        "equity_curve_mode": "strategy" if strategy_code else "account",
         "open_positions": open_count,
         "strategy_performance": _strategy_performance(db, mkt),
         "skip_stats": _load_skip_stats(db),

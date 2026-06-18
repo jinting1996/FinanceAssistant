@@ -72,62 +72,69 @@ function ExitReasonSummary({ counts }: { counts?: Record<string, number> }) {
   )
 }
 
-function EquityChart({ data }: { data: EquityCurvePoint[] }) {
+function EquityChart({ data, baseline, mode }: { data: EquityCurvePoint[]; baseline: number; mode: 'pct' | 'value' }) {
   if (data.length < 2) {
-    return <div className="h-48 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制曲线</div>
+    return <div className="h-32 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制曲线</div>
   }
 
   const width = 600
-  const height = 180
-  const pad = { top: 20, right: 20, bottom: 30, left: 60 }
+  const height = 130
+  const pad = { top: 14, right: 16, bottom: 22, left: 52 }
   const w = width - pad.left - pad.right
   const h = height - pad.top - pad.bottom
 
   const values = data.map(d => d.equity)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const range = maxV - minV || 1
+  // 纵轴锚定基准(账户:初始资金;策略:0),并设最小跨度,避免微小波动被拉满高度
+  let lo = Math.min(...values, baseline)
+  let hi = Math.max(...values, baseline)
+  const minSpan = Math.abs(baseline) * 0.05
+  if (hi - lo < minSpan) {
+    const mid = (hi + lo) / 2
+    lo = mid - minSpan / 2
+    hi = mid + minSpan / 2
+  }
+  const padV = (hi - lo) * 0.12 || 1
+  lo -= padV
+  hi += padV
+  const range = hi - lo || 1
+  const yOf = (v: number) => pad.top + h - ((v - lo) / range) * h
 
-  const points = data.map((d, i) => {
-    const x = pad.left + (i / (data.length - 1)) * w
-    const y = pad.top + h - ((d.equity - minV) / range) * h
-    return { x, y, ...d }
-  })
-
+  const points = data.map((d, i) => ({ x: pad.left + (i / (data.length - 1)) * w, y: yOf(d.equity), ...d }))
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
   const areaD = pathD + ` L${points[points.length - 1].x},${pad.top + h} L${points[0].x},${pad.top + h} Z`
 
-  const isPositive = values[values.length - 1] >= values[0]
+  const isPositive = values[values.length - 1] >= baseline
   const strokeColor = isPositive ? '#f43f5e' : '#10b981'
   const fillColor = isPositive ? 'rgba(244,63,94,0.1)' : 'rgba(16,185,129,0.1)'
 
-  // Y axis ticks
-  const yTicks = 4
+  const fmt = (v: number) => {
+    if (mode === 'pct') return baseline ? `${(((v / baseline) - 1) * 100).toFixed(1)}%` : '0%'
+    return Math.abs(v) >= 10000 ? `${(v / 10000).toFixed(2)}万` : `${v.toFixed(0)}`
+  }
+
+  const yTicks = 3
   const yLabels = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const v = minV + (range / yTicks) * i
+    const v = lo + (range / yTicks) * i
     return { v, y: pad.top + h - (i / yTicks) * h }
   })
-
-  // X axis labels (show first, middle, last)
+  const baselineY = yOf(baseline)
   const xIndices = [0, Math.floor(data.length / 2), data.length - 1]
   const xLabels = xIndices.map(i => ({ label: data[i].date.slice(5), x: points[i].x }))
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
-      {/* Grid lines */}
       {yLabels.map((t, i) => (
         <g key={i}>
           <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
           <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
-            {(t.v / 10000).toFixed(1)}万
+            {fmt(t.v)}
           </text>
         </g>
       ))}
-      {/* Area */}
+      {/* 基准线 */}
+      <line x1={pad.left} x2={width - pad.right} y1={baselineY} y2={baselineY} stroke="hsl(var(--muted-foreground))" strokeWidth={0.8} strokeDasharray="3 3" opacity={0.5} />
       <path d={areaD} fill={fillColor} />
-      {/* Line */}
       <path d={pathD} fill="none" stroke={strokeColor} strokeWidth={2} />
-      {/* X labels */}
       {xLabels.map((l, i) => (
         <text key={i} x={l.x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
           {l.label}
@@ -144,6 +151,8 @@ export default function PaperTradingPage() {
   const [trades, setTrades] = useState<PaperTradingTradeItem[]>([])
   const [tradesTotal, setTradesTotal] = useState(0)
   const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([])
+  const [curveStrategy, setCurveStrategy] = useState('')
+  const [strategyCurve, setStrategyCurve] = useState<EquityCurvePoint[]>([])
   const [strategyPerf, setStrategyPerf] = useState<StrategyPerformanceItem[]>([])
   const [skipStats, setSkipStats] = useState<PaperTradingMetricsResponse['skip_stats'] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -203,6 +212,17 @@ export default function PaperTradingPage() {
   }, [tradesPage, marketView])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // 按策略收益曲线(累计盈亏),仅在选中具体策略时按需拉取
+  useEffect(() => {
+    if (!curveStrategy) { setStrategyCurve([]); return }
+    let cancelled = false
+    const mkt = marketView === 'ALL' ? undefined : marketView
+    paperTradingApi.getMetrics(mkt, curveStrategy)
+      .then(m => { if (!cancelled) setStrategyCurve(m.equity_curve || []) })
+      .catch(() => { if (!cancelled) setStrategyCurve([]) })
+    return () => { cancelled = true }
+  }, [curveStrategy, marketView])
 
   const handleToggle = async () => {
     if (!account) return
@@ -525,8 +545,22 @@ export default function PaperTradingPage() {
 
       {/* Equity Curve */}
       <div className="card p-4">
-        <h2 className="text-sm font-semibold mb-3">收益曲线</h2>
-        <EquityChart data={equityCurve} />
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <h2 className="text-sm font-semibold">{curveStrategy ? '策略累计盈亏' : '收益曲线'}</h2>
+          <select
+            className="h-8 px-2 rounded-lg border border-border bg-background text-xs max-w-[180px]"
+            value={curveStrategy}
+            onChange={e => setCurveStrategy(e.target.value)}
+          >
+            <option value="">全部(账户净值)</option>
+            {strategyPerf.map(s => (
+              <option key={s.strategy_code} value={s.strategy_code}>{s.strategy_code}</option>
+            ))}
+          </select>
+        </div>
+        {curveStrategy
+          ? <EquityChart data={strategyCurve} baseline={0} mode="value" />
+          : <EquityChart data={equityCurve} baseline={equityCurve[0]?.equity ?? 0} mode="pct" />}
       </div>
 
       {/* Strategy Performance */}

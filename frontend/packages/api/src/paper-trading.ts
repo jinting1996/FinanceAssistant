@@ -167,10 +167,13 @@ export const paperTradingApi = {
       `/paper-trading/trades?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}${market && market !== 'ALL' ? `&market=${encodeURIComponent(market)}` : ''}`
     ),
 
-  getMetrics: (market?: string) =>
-    fetchAPI<PaperTradingMetricsResponse>(
-      `/paper-trading/metrics${market && market !== 'ALL' ? `?market=${encodeURIComponent(market)}` : ''}`
-    ),
+  getMetrics: (market?: string, strategyCode?: string) => {
+    const params = new URLSearchParams()
+    if (market && market !== 'ALL') params.set('market', market)
+    if (strategyCode) params.set('strategy_code', strategyCode)
+    const qs = params.toString()
+    return fetchAPI<PaperTradingMetricsResponse>(`/paper-trading/metrics${qs ? `?${qs}` : ''}`)
+  },
 
   toggleAccount: (enabled: boolean) =>
     fetchAPI<PaperTradingAccountResponse>('/paper-trading/account/toggle', {
