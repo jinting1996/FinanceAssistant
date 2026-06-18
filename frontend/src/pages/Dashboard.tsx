@@ -903,13 +903,13 @@ export default function DashboardPage() {
 
       {/* Portfolio Summary Cards */}
       {hasPortfolio && (
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5 mb-4">
           <div className="card p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <PiggyBank className="w-4 h-4" />
               <span className="text-[12px]">总资产</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio!.total.total_assets)}
             </div>
           </div>
@@ -923,7 +923,7 @@ export default function DashboardPage() {
               )}
               <span className="text-[12px]">总盈亏</span>
             </div>
-            <div className={`text-[20px] font-bold font-mono ${portfolio!.total.total_pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+            <div className={`text-[18px] font-bold font-mono ${portfolio!.total.total_pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
               {portfolio!.total.total_pnl >= 0 ? '+' : ''}{formatMoney(portfolio!.total.total_pnl)}
               <span className="text-[13px] ml-1.5">
                 ({portfolio!.total.total_pnl_pct >= 0 ? '+' : ''}{portfolio!.total.total_pnl_pct.toFixed(2)}%)
@@ -936,7 +936,7 @@ export default function DashboardPage() {
               <TrendingUp className="w-4 h-4" />
               <span className="text-[12px]">持仓市值</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio!.total.total_market_value)}
             </div>
           </div>
@@ -946,7 +946,7 @@ export default function DashboardPage() {
               <Wallet className="w-4 h-4" />
               <span className="text-[12px]">可用资金</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio!.total.available_funds)}
             </div>
           </div>
@@ -960,7 +960,7 @@ export default function DashboardPage() {
               )}
               <span className="text-[12px]">当日盈亏</span>
             </div>
-            <div className={`text-[20px] font-bold font-mono ${(portfolioDayPnl?.day_pnl ?? 0) >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+            <div className={`text-[18px] font-bold font-mono ${(portfolioDayPnl?.day_pnl ?? 0) >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
               {(portfolioDayPnl?.day_pnl ?? 0) >= 0 ? '+' : ''}{formatMoney(portfolioDayPnl?.day_pnl ?? 0)}
               <span className="text-[13px] ml-1.5">
                 ({(portfolioDayPnl?.day_pnl_pct ?? 0) >= 0 ? '+' : ''}{(portfolioDayPnl?.day_pnl_pct ?? 0).toFixed(2)}%)
