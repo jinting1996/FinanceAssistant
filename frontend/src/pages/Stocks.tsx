@@ -1644,28 +1644,28 @@ export default function StocksPage() {
           ))}
         </div>
       ) : portfolio ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-          <div className="card p-4">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <TrendingUp className="w-4 h-4" />
-              <span className="text-[12px]">总市值</span>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 mb-4">
+          <div className="card p-3">
+            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span className="text-[11px]">总市值</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio.total.total_market_value)}
             </div>
           </div>
-          <div className="card p-4">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
+          <div className="card p-3">
+            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
               {portfolio.total.total_pnl >= 0 ? (
-                <ArrowUpRight className="w-4 h-4 text-rose-500" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
               ) : (
-                <ArrowDownRight className="w-4 h-4 text-emerald-500" />
+                <ArrowDownRight className="w-3.5 h-3.5 text-emerald-500" />
               )}
-              <span className="text-[12px]">总盈亏</span>
+              <span className="text-[11px]">总盈亏</span>
             </div>
-            <div className={`text-[20px] font-bold font-mono ${portfolio.total.total_pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+            <div className={`text-[18px] font-bold font-mono ${portfolio.total.total_pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
               {portfolio.total.total_pnl >= 0 ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
-              <span className="text-[13px] ml-1.5">
+              <span className="text-[12px] ml-1.5">
                 ({portfolio.total.total_pnl_pct >= 0 ? '+' : ''}{portfolio.total.total_pnl_pct.toFixed(2)}%)
               </span>
             </div>
@@ -1678,52 +1678,52 @@ export default function StocksPage() {
             const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
             const isUp = dayPnl >= 0
             return (
-              <div className="card p-4">
-                <div className="flex items-center gap-2 text-muted-foreground mb-1">
+              <div className="card p-3">
+                <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
                   {isUp ? (
-                    <ArrowUpRight className="w-4 h-4 text-rose-500" />
+                    <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
                   ) : (
-                    <ArrowDownRight className="w-4 h-4 text-emerald-500" />
+                    <ArrowDownRight className="w-3.5 h-3.5 text-emerald-500" />
                   )}
-                  <span className="text-[12px]">今日盈亏</span>
+                  <span className="text-[11px]">今日盈亏</span>
                 </div>
-                <div className={`text-[20px] font-bold font-mono ${isUp ? 'text-rose-500' : 'text-emerald-500'}`}>
+                <div className={`text-[18px] font-bold font-mono ${isUp ? 'text-rose-500' : 'text-emerald-500'}`}>
                   {isUp ? '+' : ''}{formatMoney(dayPnl)}
-                  <span className="text-[13px] ml-1.5">({pct >= 0 ? '+' : ''}{pct.toFixed(2)}%)</span>
+                  <span className="text-[12px] ml-1.5">({pct >= 0 ? '+' : ''}{pct.toFixed(2)}%)</span>
                 </div>
               </div>
             )
           })()}
 
-          <div className="card p-4">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Wallet className="w-4 h-4" />
-              <span className="text-[12px]">可用资金</span>
+          <div className="card p-3">
+            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+              <Wallet className="w-3.5 h-3.5" />
+              <span className="text-[11px]">可用资金</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio.total.available_funds)}
             </div>
           </div>
-          <div className="card p-4">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <PiggyBank className="w-4 h-4" />
-              <span className="text-[12px]">总资产</span>
+          <div className="card p-3">
+            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+              <PiggyBank className="w-3.5 h-3.5" />
+              <span className="text-[11px]">总资产</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {formatMoney(portfolio.total.total_assets)}
             </div>
           </div>
 
-          <div className="card p-4">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Bell className="w-4 h-4" />
-              <span className="text-[12px]">仓位占比</span>
+          <div className="card p-3">
+            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+              <Bell className="w-3.5 h-3.5" />
+              <span className="text-[11px]">仓位占比</span>
             </div>
-            <div className="text-[20px] font-bold text-foreground font-mono">
+            <div className="text-[18px] font-bold text-foreground font-mono">
               {positionRatio ? `${positionRatio.pct.toFixed(1)}%` : '--'}
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-              {positionRatio ? `持仓市值 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
+            <div className="mt-0.5 text-[10px] text-muted-foreground line-clamp-1">
+              {positionRatio ? `持仓 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
             </div>
           </div>
         </div>
