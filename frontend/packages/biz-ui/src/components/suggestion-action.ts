@@ -8,15 +8,16 @@ export type SuggestionAction =
   | 'alert'
   | 'avoid'
 
+// 默认弱化为描边/淡底 + 彩色文字,hover 才填充高亮,避免列表里整列实心色块抢视线。
 export const suggestionActionColors: Record<SuggestionAction, string> = {
-  buy: 'bg-rose-500 text-white',
-  add: 'bg-rose-400 text-white',
-  reduce: 'bg-emerald-500 text-white',
-  sell: 'bg-emerald-600 text-white',
-  hold: 'bg-amber-500 text-white',
-  watch: 'bg-slate-500 text-white',
-  alert: 'bg-blue-500 text-white',
-  avoid: 'bg-red-600 text-white',
+  buy: 'bg-rose-500/10 text-rose-600 border border-rose-500/30 transition-colors hover:bg-rose-500 hover:text-white',
+  add: 'bg-rose-400/10 text-rose-600 border border-rose-400/30 transition-colors hover:bg-rose-400 hover:text-white',
+  reduce: 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30 transition-colors hover:bg-emerald-500 hover:text-white',
+  sell: 'bg-emerald-600/10 text-emerald-700 border border-emerald-600/30 transition-colors hover:bg-emerald-600 hover:text-white',
+  hold: 'bg-amber-500/10 text-amber-600 border border-amber-500/30 transition-colors hover:bg-amber-500 hover:text-white',
+  watch: 'bg-slate-500/10 text-slate-600 border border-slate-500/30 transition-colors hover:bg-slate-500 hover:text-white',
+  alert: 'bg-blue-500/10 text-blue-600 border border-blue-500/30 transition-colors hover:bg-blue-500 hover:text-white',
+  avoid: 'bg-red-600/10 text-red-600 border border-red-600/30 transition-colors hover:bg-red-600 hover:text-white',
 }
 
 export const suggestionActionLabels: Record<SuggestionAction, string> = {

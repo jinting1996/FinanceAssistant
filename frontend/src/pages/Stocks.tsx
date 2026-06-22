@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3, Brain } from 'lucide-react'
+import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3, Brain, AlertTriangle } from 'lucide-react'
 import { fetchAPI, recommendationsApi, stocksApi, type AIService, type NotifyChannel, type TradeRulesConfig } from '@panwatch/api'
 import { useLocalStorage } from '@/lib/utils'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
@@ -13,6 +13,7 @@ import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Skeleton } from '@panwatch/base-ui/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectLabel, SelectItem } from '@panwatch/base-ui/components/ui/select'
+import { Popover, PopoverTrigger, PopoverContent } from '@panwatch/base-ui/components/ui/popover'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
@@ -1650,88 +1651,98 @@ export default function StocksPage() {
           ))}
         </div>
       ) : portfolio ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 mb-4">
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-              <TrendingUp className="w-3.5 h-3.5" />
-              <span className="text-[11px]">总市值</span>
-            </div>
-            <div className="text-[18px] font-bold text-foreground font-mono">
-              {formatMoney(portfolio.total.total_market_value)}
-            </div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-              {portfolio.total.total_pnl >= 0 ? (
-                <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
-              ) : (
-                <ArrowDownRight className="w-3.5 h-3.5 text-emerald-500" />
-              )}
-              <span className="text-[11px]">总盈亏</span>
-            </div>
-            <div className={`text-[18px] font-bold font-mono ${portfolio.total.total_pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-              {portfolio.total.total_pnl >= 0 ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
-              <span className="text-[12px] ml-1.5">
-                ({portfolio.total.total_pnl_pct >= 0 ? '+' : ''}{portfolio.total.total_pnl_pct.toFixed(2)}%)
-              </span>
-            </div>
-          </div>
-
+        <div className="space-y-2.5 mb-4">
           {(() => {
-            const dayPnl = portfolio.total.total_daily_pnl
-            const totalMv = portfolio.total.total_market_value
-            const prevMv = totalMv - dayPnl
-            const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
-            const isUp = dayPnl >= 0
+            const ratioPct = positionRatio?.pct ?? 0
+            const avail = portfolio.total.available_funds || 0
+            const highRisk = ratioPct >= 90
+            const isFull = ratioPct >= 99 || avail <= 0
+            const pnlUp = portfolio.total.total_pnl >= 0
             return (
-              <div className="card p-3">
-                <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-                  {isUp ? (
-                    <ArrowUpRight className="w-3.5 h-3.5 text-rose-500" />
-                  ) : (
-                    <ArrowDownRight className="w-3.5 h-3.5 text-emerald-500" />
-                  )}
-                  <span className="text-[11px]">今日盈亏</span>
+              <>
+                {isFull && (
+                  <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] font-medium text-rose-600">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    满仓，无可用资金 —— 已无加仓空间，注意控制仓位风险
+                  </div>
+                )}
+
+                {/* L1 主卡：总盈亏 / 仓位占比 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  <div className="card p-4">
+                    <div className="flex items-center gap-1.5 text-muted-foreground mb-1.5">
+                      {pnlUp ? <ArrowUpRight className="w-4 h-4 text-rose-500" /> : <ArrowDownRight className="w-4 h-4 text-emerald-500" />}
+                      <span className="text-[12px]">总盈亏</span>
+                    </div>
+                    <div className={`text-[26px] leading-none font-bold font-mono ${pnlUp ? 'text-rose-500' : 'text-emerald-500'}`}>
+                      {pnlUp ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
+                      <span className="text-[14px] ml-2">({portfolio.total.total_pnl_pct >= 0 ? '+' : ''}{portfolio.total.total_pnl_pct.toFixed(2)}%)</span>
+                    </div>
+                  </div>
+
+                  <div className={`card p-4 ${highRisk ? 'border-rose-500/40 bg-rose-500/5' : ''}`}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <Bell className={`w-4 h-4 ${highRisk ? 'text-rose-500' : ''}`} />
+                        <span className="text-[12px]">仓位占比</span>
+                      </div>
+                      {highRisk && <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 font-medium">高仓位</span>}
+                    </div>
+                    <div className={`text-[26px] leading-none font-bold font-mono ${highRisk ? 'text-rose-500' : 'text-foreground'}`}>
+                      {positionRatio ? `${ratioPct.toFixed(1)}%` : '--'}
+                    </div>
+                    <div className="mt-2 h-1.5 rounded-full bg-accent/50 overflow-hidden">
+                      <div className={`h-full rounded-full ${highRisk ? 'bg-rose-500' : 'bg-primary'}`} style={{ width: `${Math.min(100, Math.max(0, ratioPct))}%` }} />
+                    </div>
+                    <div className="mt-1 text-[10px] text-muted-foreground line-clamp-1">
+                      {positionRatio ? `持仓 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
+                    </div>
+                  </div>
                 </div>
-                <div className={`text-[18px] font-bold font-mono ${isUp ? 'text-rose-500' : 'text-emerald-500'}`}>
-                  {isUp ? '+' : ''}{formatMoney(dayPnl)}
-                  <span className="text-[12px] ml-1.5">({pct >= 0 ? '+' : ''}{pct.toFixed(2)}%)</span>
+
+                {/* L2 次卡：今日盈亏 / 总市值 / 可用资金 / 总资产 */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                  {(() => {
+                    const dayPnl = portfolio.total.total_daily_pnl
+                    const totalMv = portfolio.total.total_market_value
+                    const prevMv = totalMv - dayPnl
+                    const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
+                    const isUp = dayPnl >= 0
+                    return (
+                      <div className="card p-2.5">
+                        <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+                          {isUp ? <ArrowUpRight className="w-3 h-3 text-rose-500" /> : <ArrowDownRight className="w-3 h-3 text-emerald-500" />}
+                          <span className="text-[10px]">今日盈亏</span>
+                        </div>
+                        <div className={`text-[15px] font-semibold font-mono ${isUp ? 'text-rose-500' : 'text-emerald-500'}`}>
+                          {isUp ? '+' : ''}{formatMoney(dayPnl)}
+                          <span className="text-[11px] ml-1">({pct >= 0 ? '+' : ''}{pct.toFixed(2)}%)</span>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                  <div className="card p-2.5">
+                    <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+                      <TrendingUp className="w-3 h-3" /><span className="text-[10px]">总市值</span>
+                    </div>
+                    <div className="text-[15px] font-semibold text-foreground font-mono">{formatMoney(portfolio.total.total_market_value)}</div>
+                  </div>
+                  <div className="card p-2.5">
+                    <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+                      <Wallet className="w-3 h-3" /><span className="text-[10px]">可用资金</span>
+                    </div>
+                    <div className="text-[15px] font-semibold text-foreground font-mono">{formatMoney(portfolio.total.available_funds)}</div>
+                  </div>
+                  <div className="card p-2.5">
+                    <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
+                      <PiggyBank className="w-3 h-3" /><span className="text-[10px]">总资产</span>
+                    </div>
+                    <div className="text-[15px] font-semibold text-foreground font-mono">{formatMoney(portfolio.total.total_assets)}</div>
+                  </div>
                 </div>
-              </div>
+              </>
             )
           })()}
-
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-              <Wallet className="w-3.5 h-3.5" />
-              <span className="text-[11px]">可用资金</span>
-            </div>
-            <div className="text-[18px] font-bold text-foreground font-mono">
-              {formatMoney(portfolio.total.available_funds)}
-            </div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-              <PiggyBank className="w-3.5 h-3.5" />
-              <span className="text-[11px]">总资产</span>
-            </div>
-            <div className="text-[18px] font-bold text-foreground font-mono">
-              {formatMoney(portfolio.total.total_assets)}
-            </div>
-          </div>
-
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
-              <Bell className="w-3.5 h-3.5" />
-              <span className="text-[11px]">仓位占比</span>
-            </div>
-            <div className="text-[18px] font-bold text-foreground font-mono">
-              {positionRatio ? `${positionRatio.pct.toFixed(1)}%` : '--'}
-            </div>
-            <div className="mt-0.5 text-[10px] text-muted-foreground line-clamp-1">
-              {positionRatio ? `持仓 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
-            </div>
-          </div>
         </div>
       ) : null}
 
@@ -2065,35 +2076,67 @@ export default function StocksPage() {
                                         {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
                                       </span>
                                     ) : (
-                                      <span className="text-[10px] text-muted-foreground/50">-</span>
+                                      <span className="text-[10px] text-muted-foreground/40">未设</span>
                                     )}
                                   </td>
                                   <td className="px-4 py-2.5">
-                                    {stock && (
-                                      <button onClick={() => setAgentDialogStock(stock)} className="flex items-center gap-1.5 hover:opacity-70 transition-opacity">
-                                        {stock.agents && stock.agents.length > 0 ? (
-                                          <div className="flex items-center gap-1.5 flex-wrap">
-                                            {stock.agents.map(sa => {
-                                              const agent = agents.find(a => a.name === sa.agent_name)
-                                              const isRunning = runningAgents[stock.id] === sa.agent_name
-                                              return (
-                                                <span key={sa.agent_name} className="inline-flex items-center gap-1">
-                                                  <Badge variant="default" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
-                                                  {isRunning && (
-                                                    <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
-                                                      <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
-                                                      执行中
-                                                    </span>
-                                                  )}
-                                                </span>
-                                              )
-                                            })}
-                                          </div>
-                                        ) : (
-                                          <span className="text-[11px] text-muted-foreground/50 flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
-                                        )}
-                                      </button>
-                                    )}
+                                    {stock && (() => {
+                                      const assigned = stock.agents || []
+                                      const runningName = runningAgents[stock.id]
+                                      if (assigned.length === 0) {
+                                        return (
+                                          <button onClick={() => setAgentDialogStock(stock)} className="text-[11px] text-muted-foreground/50 flex items-center gap-1 hover:text-foreground transition-colors">
+                                            <Bot className="w-3 h-3" /> 未配置
+                                          </button>
+                                        )
+                                      }
+                                      return (
+                                        <Popover>
+                                          <PopoverTrigger asChild>
+                                            <button className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11px] text-foreground hover:bg-accent/50 transition-colors">
+                                              <Bot className="w-3 h-3 text-muted-foreground" />
+                                              <span>Agent</span>
+                                              <span className="font-mono text-muted-foreground">{assigned.length}</span>
+                                              {runningName ? (
+                                                <span className="w-2.5 h-2.5 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+                                              ) : (
+                                                <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                                              )}
+                                            </button>
+                                          </PopoverTrigger>
+                                          <PopoverContent align="start" className="w-56 p-1.5">
+                                            <div className="flex items-center justify-between px-1.5 py-1">
+                                              <span className="text-[11px] font-medium text-muted-foreground">已配置 Agent</span>
+                                              <button onClick={() => setAgentDialogStock(stock)} className="text-[10px] text-primary hover:underline">配置</button>
+                                            </div>
+                                            <div className="space-y-0.5">
+                                              {assigned.map(sa => {
+                                                const agent = agents.find(a => a.name === sa.agent_name)
+                                                const isRunning = runningName === sa.agent_name
+                                                return (
+                                                  <div key={sa.agent_name} className="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-accent/40">
+                                                    <span className="text-[12px] text-foreground truncate">{agent?.display_name || sa.agent_name}</span>
+                                                    {isRunning ? (
+                                                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 shrink-0">
+                                                        <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />执行中
+                                                      </span>
+                                                    ) : (
+                                                      <button
+                                                        onClick={() => triggerStockAgent(stock.id, sa.agent_name)}
+                                                        disabled={!!runningName}
+                                                        className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-40 disabled:no-underline shrink-0"
+                                                      >
+                                                        <Play className="w-2.5 h-2.5" />触发
+                                                      </button>
+                                                    )}
+                                                  </div>
+                                                )
+                                              })}
+                                            </div>
+                                          </PopoverContent>
+                                        </Popover>
+                                      )
+                                    })()}
                                   </td>
                                   <td className="px-4 py-2.5 text-center">
                                     <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

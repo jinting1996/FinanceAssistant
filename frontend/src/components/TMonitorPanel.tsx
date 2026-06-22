@@ -88,13 +88,25 @@ export default function TMonitorPanel() {
                 <div className="text-[13px] font-medium">{row.stock_name} <span className="font-mono text-muted-foreground">{row.stock_symbol}</span></div>
                 <div className="flex items-center gap-1.5"><Badge variant="secondary">T Score {Math.round(row.score)}</Badge><Badge>{stateLabels[row.state] || row.state}</Badge></div>
               </div>
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 text-[11px]">
-                <div><span className="text-muted-foreground">现价</span><div className="font-mono">{price(row.current_price)}</div></div>
-                <div><span className="text-muted-foreground">VWAP</span><div className="font-mono">{price(row.vwap)}</div></div>
-                <div><span className="text-muted-foreground">支撑</span><div className="font-mono">{price(row.support_price)}</div></div>
-                <div><span className="text-muted-foreground">止损</span><div className="font-mono text-emerald-600">{price(row.stop_loss_price)}</div></div>
-                <div><span className="text-muted-foreground">目标</span><div className="font-mono text-rose-600">{price(row.target_price)}</div></div>
-                <div><span className="text-muted-foreground">建议</span><div className="font-mono">{row.recommended_quantity || '--'} 股</div></div>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mt-3">
+                {[
+                  { label: '现价', value: price(row.current_price), cls: 'text-foreground' },
+                  { label: 'VWAP', value: price(row.vwap), cls: 'text-foreground' },
+                  { label: '支撑', value: price(row.support_price), cls: 'text-foreground' },
+                  { label: '止损', value: price(row.stop_loss_price), cls: 'text-emerald-600' },
+                  { label: '目标', value: price(row.target_price), cls: 'text-rose-600' },
+                ].map(f => (
+                  <div key={f.label} className="rounded-md bg-background/40 px-1.5 py-1">
+                    <div className="text-[10px] leading-tight text-muted-foreground">{f.label}</div>
+                    <div className={`text-[12px] font-mono font-medium ${f.cls}`}>{f.value}</div>
+                  </div>
+                ))}
+                <div className="rounded-md border border-primary/20 bg-primary/10 px-1.5 py-1">
+                  <div className="text-[10px] leading-tight text-primary/70">建议</div>
+                  <div className="text-[12px] font-mono font-semibold text-primary">
+                    {row.recommended_quantity || '--'}<span className="ml-0.5 text-[10px] font-normal">股</span>
+                  </div>
+                </div>
               </div>
               {row.context?.reason && <div className="text-[11px] text-muted-foreground mt-2 line-clamp-2">{row.context.reason}</div>}
               {row.state === 'buy_t_notified' && <Button size="sm" className="mt-2" onClick={() => confirm(row, 'buy')}>确认已低吸</Button>}

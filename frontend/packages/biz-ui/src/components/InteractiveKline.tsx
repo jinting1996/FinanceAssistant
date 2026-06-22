@@ -510,12 +510,15 @@ export default function InteractiveKline(props: {
     })
     volSeries.setData(series.volumes)
     chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
-    const volMa5Series = addLine(chart, LW, { priceScaleId: 'vol', color: 'rgba(245, 158, 11, 0.9)', lineWidth: 1 })
-    const volMa10Series = addLine(chart, LW, { priceScaleId: 'vol', color: 'rgba(14, 165, 233, 0.9)', lineWidth: 1 })
+    // 紧凑/迷你图右侧空间有限,折叠各均线的末值标签与价格线,避免与主价标签重叠;
+    // 均线数值仍可在悬浮提示中查看。常规尺寸保持原样。
+    const auxLabelOptions = dense ? { lastValueVisible: false, priceLineVisible: false } : {}
+    const volMa5Series = addLine(chart, LW, { priceScaleId: 'vol', color: 'rgba(245, 158, 11, 0.9)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false })
+    const volMa10Series = addLine(chart, LW, { priceScaleId: 'vol', color: 'rgba(14, 165, 233, 0.9)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false })
 
-    const ma5Series = addLine(chart, LW, { color: 'rgba(99, 102, 241, 0.85)', lineWidth: 2 })
-    const ma10Series = addLine(chart, LW, { color: 'rgba(245, 158, 11, 0.85)', lineWidth: 2 })
-    const ma20Series = addLine(chart, LW, { color: 'rgba(14, 165, 233, 0.85)', lineWidth: 2 })
+    const ma5Series = addLine(chart, LW, { color: 'rgba(99, 102, 241, 0.85)', lineWidth: 2, ...auxLabelOptions })
+    const ma10Series = addLine(chart, LW, { color: 'rgba(245, 158, 11, 0.85)', lineWidth: 2, ...auxLabelOptions })
+    const ma20Series = addLine(chart, LW, { color: 'rgba(14, 165, 233, 0.85)', lineWidth: 2, ...auxLabelOptions })
 
     const mapLine = (arr: Array<number | null>) =>
       series.klines

@@ -6,10 +6,13 @@ import {
   BarChart3,
   Brain,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Flame,
   Layers,
   Loader2,
+  Maximize2,
   Newspaper,
   RefreshCw,
   Search,
@@ -35,6 +38,7 @@ import {
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 
@@ -136,6 +140,19 @@ const impactClass = (level: ImpactLevel) => {
   return 'bg-accent text-muted-foreground border-border/50'
 }
 
+// 列表态把影响/情绪压成小色点,降低重复标签噪声。
+const impactDot = (level: ImpactLevel) => {
+  if (level === 'high') return 'bg-amber-400'
+  if (level === 'medium') return 'bg-primary'
+  return 'bg-muted-foreground/40'
+}
+
+const sentimentDot = (sentiment: EventSentiment) => {
+  if (sentiment === 'positive') return 'bg-rose-400'
+  if (sentiment === 'negative') return 'bg-emerald-400'
+  return 'bg-blue-400'
+}
+
 const flowClass = (state: FlowState) => {
   if (state === 'inflow') return 'bg-rose-500/12 text-rose-400 border-rose-500/25'
   if (state === 'active') return 'bg-amber-500/12 text-amber-300 border-amber-500/25'
@@ -167,9 +184,13 @@ function EventSkeleton() {
   )
 }
 
-function BoardRow({ board, index }: { board: SectorFlowItem; index: number }) {
+function BoardRow({ board, index, maxScore }: { board: SectorFlowItem; index: number; maxScore: number }) {
+  const [expanded, setExpanded] = useState(false)
   const pct = board.change_pct ?? 0
   const positive = pct >= 0
+  // 按相对最大热度归一化,拉开长度差异(否则分数都接近上限时全是满格)。
+  const relWidth = maxScore > 0 ? Math.max(8, Math.min(100, (board.flow_score / maxScore) * 100)) : 8
+  const hasDetail = !!board.rotation_signal || board.leaders.length > 0
   return (
     <div className="rounded-lg border border-border/60 bg-background/50 p-3">
       <div className="flex items-start justify-between gap-3">
@@ -195,17 +216,32 @@ function BoardRow({ board, index }: { board: SectorFlowItem; index: number }) {
         </div>
       </div>
       <div className="mt-3 h-1.5 rounded-full bg-muted overflow-hidden">
-        <div className={`h-full rounded-full ${scoreColor(board.flow_score)}`} style={{ width: `${Math.max(8, Math.min(100, board.flow_score))}%` }} />
+        <div className={`h-full rounded-full ${scoreColor(board.flow_score)}`} style={{ width: `${relWidth}%` }} />
       </div>
-      <p className="mt-3 text-[12px] leading-5 text-muted-foreground">{board.rotation_signal}</p>
-      {board.leaders.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {board.leaders.slice(0, 5).map((leader) => (
-            <span key={`${leader.market}:${leader.symbol}`} className="px-2 py-1 rounded-md bg-accent/50 text-[11px] text-muted-foreground">
-              {leader.name} {formatPct(leader.change_pct)}
-            </span>
-          ))}
-        </div>
+      {hasDetail && (
+        <>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {expanded ? '收起' : '轮动解读与龙头'}
+          </button>
+          {expanded && (
+            <>
+              {board.rotation_signal && <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{board.rotation_signal}</p>}
+              {board.leaders.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {board.leaders.slice(0, 5).map((leader) => (
+                    <span key={`${leader.market}:${leader.symbol}`} className="px-2 py-1 rounded-md bg-accent/50 text-[11px] text-muted-foreground">
+                      {leader.name} {formatPct(leader.change_pct)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   )
@@ -231,6 +267,7 @@ function WatchedBoardCard({
   onAnalyze: (leader: SectorLeader) => void
 }) {
   const positive = (signal?.change_5d_pct ?? 0) >= 0
+  const [zoomOpen, setZoomOpen] = useState(false)
   return (
     <div className={`rounded-lg border border-border/70 bg-background/60 ${compact ? 'p-3' : 'p-4'}`}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -257,26 +294,33 @@ function WatchedBoardCard({
         </div>
       </div>
 
-      <div className={`mt-4 grid gap-2 ${compact ? 'grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-4'}`}>
-        <div className={`rounded-lg bg-accent/35 ${compact ? 'p-2.5' : 'p-3'}`}>
-          <div className="text-[11px] text-muted-foreground">最新收盘</div>
-          <div className="mt-1 text-[15px] font-semibold">{signal?.last_close?.toFixed(2) || '--'}</div>
-        </div>
-        <div className={`rounded-lg bg-accent/35 ${compact ? 'p-2.5' : 'p-3'}`}>
-          <div className="text-[11px] text-muted-foreground">趋势评分</div>
-          <div className="mt-1 text-[15px] font-semibold">{signal?.trend_score?.toFixed(1) || '--'}</div>
-        </div>
-        <div className={`rounded-lg bg-accent/35 ${compact ? 'p-2.5' : 'p-3'}`}>
-          <div className="text-[11px] text-muted-foreground">MACD</div>
-          <div className="mt-1"><SignalBadge label={signal?.macd_label || '--'} tone={macdTone[signal?.macd_state || '']} /></div>
-        </div>
-        <div className={`rounded-lg bg-accent/35 ${compact ? 'p-2.5' : 'p-3'}`}>
-          <div className="text-[11px] text-muted-foreground">RSI</div>
-          <div className="mt-1"><SignalBadge label={signal?.rsi_label || '--'} /></div>
-        </div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className="inline-flex items-center gap-1 rounded-md bg-accent/40 px-2 py-1">
+          <span className="text-muted-foreground">收盘</span>
+          <span className="font-mono font-semibold text-foreground">{signal?.last_close?.toFixed(2) || '--'}</span>
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-md bg-accent/40 px-2 py-1">
+          <span className="text-muted-foreground">趋势</span>
+          <span className="font-mono font-semibold text-foreground">{signal?.trend_score?.toFixed(1) || '--'}</span>
+        </span>
+        <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 ${macdTone[signal?.macd_state || ''] || 'bg-accent/40 border-border/50 text-muted-foreground'}`}>
+          <span className="opacity-70">MACD</span>
+          <span className="font-medium">{signal?.macd_label || '--'}</span>
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-md bg-accent/40 px-2 py-1">
+          <span className="text-muted-foreground">RSI</span>
+          <span className="font-medium text-foreground">{signal?.rsi_label || '--'}</span>
+        </span>
       </div>
 
-      <div className={`mt-3 rounded-lg border border-border/60 bg-background/40 ${compact ? 'p-2' : 'p-2.5'}`}>
+      <div
+        className={`group relative mt-3 cursor-zoom-in rounded-lg border border-border/60 bg-background/40 ${compact ? 'p-2' : 'p-2.5'}`}
+        onClick={() => setZoomOpen(true)}
+        title="点击放大查看大图"
+      >
+        <div className="pointer-events-none absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-md bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+          <Maximize2 className="w-3 h-3" /> 放大
+        </div>
         <InteractiveKline
           symbol={board.board_code}
           market="CN"
@@ -288,12 +332,31 @@ function WatchedBoardCard({
         />
       </div>
 
-      <div className="mt-4">
-        <div className="mb-2 flex items-center gap-2 text-[12px] font-medium">
-          <Brain className="w-3.5 h-3.5 text-primary" />
-          龙头股深度分析
-        </div>
-        {signal?.leaders?.length ? (
+      <Dialog open={zoomOpen} onOpenChange={setZoomOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              {board.board_name}
+              <span className="text-[12px] font-normal text-muted-foreground">{board.board_code}</span>
+            </DialogTitle>
+          </DialogHeader>
+          <InteractiveKline
+            symbol={board.board_code}
+            market="CN"
+            initialDays="250"
+            endpointBuilder={({ symbol, days }) =>
+              `/market-events/boards/${encodeURIComponent(symbol)}/kline?market=CN&days=${encodeURIComponent(String(days))}`
+            }
+          />
+        </DialogContent>
+      </Dialog>
+
+      {signal?.leaders?.length ? (
+        <div className="mt-4">
+          <div className="mb-2 flex items-center gap-2 text-[12px] font-medium">
+            <Brain className="w-3.5 h-3.5 text-primary" />
+            龙头股深度分析
+          </div>
           <div className="flex flex-wrap gap-2">
             {signal.leaders.slice(0, compact ? 3 : 5).map((leader) => (
               <Button
@@ -308,10 +371,12 @@ function WatchedBoardCard({
               </Button>
             ))}
           </div>
-        ) : (
-          <div className="text-[12px] text-muted-foreground">暂无龙头股数据。</div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
+          <Brain className="w-3 h-3" /> 龙头股深度分析 · 暂无数据
+        </div>
+      )}
     </div>
   )
 }
@@ -744,18 +809,23 @@ export default function MarketEventsPage() {
             ) : (
               <>
                 <div className="space-y-3">
-                  {eventDays.map((day) => (
+                  {eventDays.map((day) => {
+                    const dayCats = Array.from(new Set(day.events.map((e) => e.event_category || e.source_label).filter(Boolean)))
+                    const sharedCat = dayCats.length === 1 ? dayCats[0] : null
+                    return (
                     <div key={day.date} className="rounded-lg border border-border/60 bg-background/45 p-3">
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <CalendarDays className="w-4 h-4 text-primary" />
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CalendarDays className="w-4 h-4 text-primary shrink-0" />
                           <span className="text-[13px] font-semibold">{dateLabel(day.date)}</span>
+                          {sharedCat && <span className="text-[11px] text-muted-foreground/70 truncate">· {sharedCat}</span>}
                         </div>
-                        <span className="text-[11px] text-muted-foreground">{day.events.length} 项</span>
+                        <span className="text-[11px] text-muted-foreground shrink-0">{day.events.length} 项</span>
                       </div>
                       <div className="space-y-2">
                         {day.events.map((item) => {
                           const active = selectedEvent?.id === item.id
+                          const isHigh = item.impact_level === 'high'
                           return (
                             <button
                               key={item.id}
@@ -764,20 +834,27 @@ export default function MarketEventsPage() {
                               className={`w-full rounded-lg border p-3 text-left transition-colors ${
                                 active
                                   ? 'border-primary/50 bg-primary/8'
-                                  : 'border-border/50 bg-accent/20 hover:border-primary/30 hover:bg-accent/35'
+                                  : isHigh
+                                    ? 'border-amber-500/40 bg-amber-500/8 hover:border-amber-500/60 hover:bg-amber-500/12'
+                                    : 'border-border/50 bg-accent/20 hover:border-primary/30 hover:bg-accent/35'
                               }`}
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <span className="text-[11px] font-mono text-muted-foreground">{eventTimeLabel(item.event_date)}</span>
-                                <span className={`px-1.5 py-0.5 rounded-md border text-[10.5px] ${impactClass(item.impact_level)}`}>
-                                  {impactLabel[item.impact_level]}
-                                </span>
-                                <span className={`px-1.5 py-0.5 rounded-md border text-[10.5px] ${sentimentClass(item.sentiment)}`}>
-                                  {sentimentLabel[item.sentiment]}
-                                </span>
-                                <span className="text-[10.5px] text-muted-foreground">{item.event_category || item.source_label}</span>
+                                {isHigh ? (
+                                  <span className={`px-1.5 py-0.5 rounded-md border text-[10.5px] font-medium ${impactClass('high')}`}>
+                                    {impactLabel.high}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1" title={`${impactLabel[item.impact_level]} · ${sentimentLabel[item.sentiment]}`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${impactDot(item.impact_level)}`} />
+                                    <span className={`w-1.5 h-1.5 rounded-full ${sentimentDot(item.sentiment)}`} />
+                                  </span>
+                                )}
+                                {isHigh && <span className={`w-1.5 h-1.5 rounded-full ${sentimentDot(item.sentiment)}`} title={sentimentLabel[item.sentiment]} />}
+                                {!sharedCat && <span className="text-[10.5px] text-muted-foreground/70 truncate">{item.event_category || item.source_label}</span>}
                               </div>
-                              <div className="mt-2 text-[13px] font-medium leading-5 text-foreground">{item.title}</div>
+                              <div className={`mt-2 text-[13px] leading-5 text-foreground ${isHigh ? 'font-semibold' : 'font-medium'}`}>{item.title}</div>
                               <div className="mt-2 flex flex-wrap gap-1.5">
                                 {item.related_boards.slice(0, 4).map((board) => (
                                   <span key={board} className="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[10.5px]">
@@ -790,7 +867,8 @@ export default function MarketEventsPage() {
                         })}
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
 
                 <aside className="rounded-lg border border-border/60 bg-background/55 p-4 lg:sticky lg:top-24 lg:self-start">
@@ -883,7 +961,7 @@ export default function MarketEventsPage() {
                 <EmptyState text="暂无可用板块走势数据。" />
               ) : (
                 topBoards.map((board, index) => (
-                  <BoardRow key={board.code} board={board} index={index} />
+                  <BoardRow key={board.code} board={board} index={index} maxScore={Math.max(...topBoards.map((b) => b.flow_score || 0), 1)} />
                 ))
               )}
             </div>
