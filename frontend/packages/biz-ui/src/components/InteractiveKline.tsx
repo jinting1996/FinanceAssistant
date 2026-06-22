@@ -89,7 +89,9 @@ function parseKlineTime(dateStr: string): KlineTime | null {
   const minute = Number(m[5])
   const second = Number(m[6] || 0)
   if (![year, month, dayOfMonth, hour, minute, second].every(Number.isFinite)) return null
-  return Math.floor(Date.UTC(year, month - 1, dayOfMonth, hour - 8, minute, second) / 1000)
+  // 分钟线时间为北京交易时间。lightweight-charts 时间轴按 UTC 渲染,
+  // 因此把北京墙钟时间直接编码成 UTC 时间戳,轴上才显示 09:31 而非 01:31。
+  return Math.floor(Date.UTC(year, month - 1, dayOfMonth, hour, minute, second) / 1000)
 }
 
 function timeKeyFromKlineDate(dateStr: string): string | null {
