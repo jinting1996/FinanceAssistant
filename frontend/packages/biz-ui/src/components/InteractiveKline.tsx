@@ -14,6 +14,8 @@ type KlineItem = {
   high: number
   low: number
   volume: number | null
+  amount?: number | null
+  source?: string
 }
 
 type KlinesResponse = {
@@ -21,6 +23,7 @@ type KlinesResponse = {
   market: string
   days: number
   interval?: string
+  source?: string | null
   klines: KlineItem[]
 }
 
@@ -51,6 +54,8 @@ type HoverTipRow = {
   macd: number | null
   signal: number | null
   rsi6: number | null
+  volume: number
+  amount: number | null
 }
 
 type HoverTip = {
@@ -235,6 +240,7 @@ export default function InteractiveKline(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [data, setData] = useState<KlineItem[]>([])
+  const [dataSource, setDataSource] = useState('')
   const [priceAction, setPriceAction] = useState<PriceActionOverlay | null>(null)
   const [showRsi, setShowRsi] = useState(!dense)
   const [hoverTip, setHoverTip] = useState<HoverTip>({ visible: false, x: 0, y: 0, row: null })
@@ -284,6 +290,7 @@ export default function InteractiveKline(props: {
           const res = await fetchAPI<KlinesResponse>(query(d))
           const kl = res.klines || []
           if (kl.length > best.length) best = kl
+          if (kl.length > 0) setDataSource(String(res.source || kl[0]?.source || ''))
           if (d === fixedDays && kl.length > 0) break
         } catch (e) {
           lastError = e
@@ -306,6 +313,7 @@ export default function InteractiveKline(props: {
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载K线失败')
       setData([])
+      setDataSource('')
       setPriceAction(null)
     } finally {
       setLoading(false)
@@ -451,15 +459,21 @@ export default function InteractiveKline(props: {
       crosshair: { mode: 1 },
     })
 
-    const candleSeries = addCandles(chart, LW, {
-      upColor: '#ef4444',
-      downColor: '#10b981',
-      borderUpColor: '#ef4444',
-      borderDownColor: '#10b981',
-      wickUpColor: '#ef4444',
-      wickDownColor: '#10b981',
-    })
-    candleSeries.setData(series.candles)
+    const mainSeries = interval === '1min'
+      ? addLine(chart, LW, { color: '#2563eb', lineWidth: 2, priceLineVisible: true })
+      : addCandles(chart, LW, {
+          upColor: '#ef4444',
+          downColor: '#10b981',
+          borderUpColor: '#ef4444',
+          borderDownColor: '#10b981',
+          wickUpColor: '#ef4444',
+          wickDownColor: '#10b981',
+        })
+    mainSeries.setData(
+      interval === '1min'
+        ? series.klines.map(k => ({ time: k.time, value: k.close }))
+        : series.candles,
+    )
 
     if (interval === '1d' && priceAction?.valid) {
       const priceLines = [
@@ -471,7 +485,7 @@ export default function InteractiveKline(props: {
       for (const [key, title, color] of priceLines) {
         const price = Number(priceAction.levels?.[key])
         if (!Number.isFinite(price) || price <= 0) continue
-        candleSeries.createPriceLine?.({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title })
+        mainSeries.createPriceLine?.({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title })
       }
       const markers = (priceAction.events || [])
         .map(event => {
@@ -487,7 +501,7 @@ export default function InteractiveKline(props: {
           }
         })
         .filter(Boolean)
-      applySeriesMarkers(candleSeries, LW, markers as any[])
+      applySeriesMarkers(mainSeries, LW, markers as any[])
     }
 
     const volSeries = addHistogram(chart, LW, {
@@ -635,7 +649,7 @@ export default function InteractiveKline(props: {
 
       const k = series.klines[idx]
       const tooltipWidth = 280
-      const tooltipHeight = 152
+      const tooltipHeight = 184
       let x = point.x + 12
       let y = point.y + 12
       if (x + tooltipWidth > container.clientWidth - 6) x = point.x - tooltipWidth - 12
@@ -659,6 +673,8 @@ export default function InteractiveKline(props: {
           macd: series.macd.macd[idx],
           signal: series.macd.signal[idx],
           rsi6: series.rsi6[idx],
+          volume: Number(k.volume || 0),
+          amount: k.amount == null ? null : Number(k.amount),
         },
       })
     })
@@ -699,7 +715,14 @@ export default function InteractiveKline(props: {
     <div className={`card ${dense ? 'p-2.5' : 'p-4 md:p-5'}`}>
       {!isMini && (
       <div className={`flex flex-col md:flex-row md:items-center justify-between gap-2 ${dense ? 'mb-2' : 'mb-3'}`}>
-        <div className="text-[13px] font-semibold text-foreground">K线图</div>
+        <div className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+          <span>{interval === '1min' ? '分时线' : interval === '5min' ? '5分钟K线' : 'K线图'}</span>
+          {isIntradayInterval(interval) && dataSource ? (
+            <span className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] font-normal text-blue-600 dark:text-blue-400">
+              {dataSource.includes('tencent') ? '腾讯行情' : dataSource}
+            </span>
+          ) : null}
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           {!dense && <Button variant={showRsi ? 'default' : 'secondary'} size="sm" className="h-8 px-2.5" onClick={() => setShowRsi(v => !v)}>
             强弱线
@@ -788,6 +811,8 @@ export default function InteractiveKline(props: {
               <span>收盘价 <span className="font-mono text-foreground">{hoverTip.row.close.toFixed(2)}</span></span>
               <span>最高价 <span className="font-mono text-foreground">{hoverTip.row.high.toFixed(2)}</span></span>
               <span>最低价 <span className="font-mono text-foreground">{hoverTip.row.low.toFixed(2)}</span></span>
+              <span>成交量 <span className="font-mono text-foreground">{hoverTip.row.volume.toLocaleString()}</span></span>
+              <span>成交额 <span className="font-mono text-foreground">{hoverTip.row.amount != null ? hoverTip.row.amount.toLocaleString() : '--'}</span></span>
               <span>{isIntradayInterval(interval) ? 'MA5' : '5日均线'} <span className="font-mono text-foreground">{hoverTip.row.ma5 != null ? hoverTip.row.ma5.toFixed(2) : '--'}</span></span>
               <span>{isIntradayInterval(interval) ? 'MA10' : '10日均线'} <span className="font-mono text-foreground">{hoverTip.row.ma10 != null ? hoverTip.row.ma10.toFixed(2) : '--'}</span></span>
               <span>{isIntradayInterval(interval) ? 'MA20' : '20日均线'} <span className="font-mono text-foreground">{hoverTip.row.ma20 != null ? hoverTip.row.ma20.toFixed(2) : '--'}</span></span>

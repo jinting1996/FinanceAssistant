@@ -17,6 +17,7 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
+import TMonitorPanel from '@/components/TMonitorPanel'
 
 interface AgentResult {
   success?: boolean
@@ -60,6 +61,7 @@ interface Position {
   market: string
   cost_price: number
   quantity: number
+  sellable_quantity: number | null
   invested_amount: number | null
   trading_style: string  // short: 短线, swing: 波段, long: 长线
   current_price: number | null
@@ -154,6 +156,7 @@ interface PositionForm {
   stock_id: number
   cost_price: string
   quantity: string
+  sellable_quantity: string
   invested_amount: string
   trading_style: string
   // 搜索选中的股票信息（新增持仓时用）
@@ -411,7 +414,7 @@ export default function StocksPage() {
 
   // Position form
   const [positionDialogOpen, setPositionDialogOpen] = useState(false)
-  const [positionForm, setPositionForm] = useState<PositionForm>({ account_id: 0, stock_id: 0, cost_price: '', quantity: '', invested_amount: '', trading_style: '', stock_symbol: '', stock_name: '', stock_market: 'CN' })
+  const [positionForm, setPositionForm] = useState<PositionForm>({ account_id: 0, stock_id: 0, cost_price: '', quantity: '', sellable_quantity: '', invested_amount: '', trading_style: '', stock_symbol: '', stock_name: '', stock_market: 'CN' })
   const [editPositionId, setEditPositionId] = useState<number | null>(null)
   const [positionDialogAccountId, setPositionDialogAccountId] = useState<number | null>(null)
   const [positionSearchQuery, setPositionSearchQuery] = useState('')
@@ -1102,6 +1105,7 @@ export default function StocksPage() {
         stock_id: position.stock_id,
         cost_price: position.cost_price.toString(),
         quantity: position.quantity.toString(),
+        sellable_quantity: (position.sellable_quantity ?? position.quantity).toString(),
         invested_amount: position.invested_amount?.toString() || '',
         trading_style: position.trading_style || '',
         stock_symbol: position.symbol,
@@ -1115,6 +1119,7 @@ export default function StocksPage() {
         stock_id: 0,
         cost_price: '',
         quantity: '',
+        sellable_quantity: '',
         invested_amount: '',
         trading_style: '',
         stock_symbol: '',
@@ -1205,6 +1210,7 @@ export default function StocksPage() {
         stock_id: stockId,
         cost_price: parseFloat(positionForm.cost_price),
         quantity: parseInt(positionForm.quantity),
+        sellable_quantity: positionForm.sellable_quantity ? parseInt(positionForm.sellable_quantity) : parseInt(positionForm.quantity),
         invested_amount: positionForm.invested_amount ? parseFloat(positionForm.invested_amount) : null,
         trading_style: positionForm.trading_style,  // 空字符串表示清空
       }
@@ -1849,6 +1855,9 @@ export default function StocksPage() {
       </Dialog>
 
       {/* Accounts & Positions */}
+      {viewTab === 'positions' && (
+        <TMonitorPanel />
+      )}
       {viewTab === 'positions' && (
         portfolio && portfolio.accounts.length === 0 ? (
           <div className="card flex flex-col items-center justify-center py-20">
@@ -2726,7 +2735,7 @@ export default function StocksPage() {
                 )}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <Label>成本价</Label>
                 <Input
@@ -2743,6 +2752,16 @@ export default function StocksPage() {
                   value={positionForm.quantity}
                   onChange={e => setPositionForm({ ...positionForm, quantity: e.target.value })}
                   placeholder="0"
+                  className="font-mono"
+                  inputMode="numeric"
+                />
+              </div>
+              <div>
+                <Label>可卖底仓</Label>
+                <Input
+                  value={positionForm.sellable_quantity}
+                  onChange={e => setPositionForm({ ...positionForm, sellable_quantity: e.target.value })}
+                  placeholder={positionForm.quantity || '默认等于持仓'}
                   className="font-mono"
                   inputMode="numeric"
                 />

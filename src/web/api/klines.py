@@ -51,6 +51,7 @@ def _serialize_klines(klines) -> list[dict]:
             "high": k.high,
             "low": k.low,
             "volume": k.volume,
+            "amount": getattr(k, "amount", None),
             "source": getattr(k, "source", "") or "",
         }
         for k in klines
@@ -108,6 +109,7 @@ def _aggregate_klines(klines, interval: str) -> list:
         high = max(it[1].high for it in items)
         low = min(it[1].low for it in items)
         vol = sum(it[1].volume for it in items)
+        amounts = [getattr(it[1], "amount", None) for it in items]
         out.append(
             type(first)(
                 date=items[-1][0].strftime("%Y-%m-%d"),
@@ -116,6 +118,7 @@ def _aggregate_klines(klines, interval: str) -> list:
                 high=high,
                 low=low,
                 volume=vol,
+                amount=sum(amounts) if all(value is not None for value in amounts) else None,
                 source=getattr(first, "source", "") or "",
             )
         )

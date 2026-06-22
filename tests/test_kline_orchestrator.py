@@ -189,6 +189,34 @@ class TestKlineIntervalCapability(unittest.IsolatedAsyncioTestCase):
         self.assertIn("5min", resp.error)
         self.assertIn("no kline provider supports interval", resp.error)
 
+    async def test_intraday_never_falls_back_to_eastmoney(self):
+        """腾讯分钟线失败时不得回退到需要代理的东方财富。"""
+        orch = KlineOrchestrator()
+        tencent = _MockKlineProvider(
+            "tencent",
+            results=[ProviderResponse(success=False, error="tencent unavailable")],
+        )
+        tencent.supports_intraday = True
+        eastmoney = _MockKlineProvider("eastmoney")
+        eastmoney.supports_intraday = True
+        orch.register("tencent", lambda cfg: tencent)
+        orch.register("eastmoney", lambda cfg: eastmoney)
+        orch._get_or_create_instance("tencent", {})
+        orch._get_or_create_instance("eastmoney", {})
+        _stub_sources(orch, ["tencent", "eastmoney"])
+
+        resp = await orch.fetch(
+            ProviderRequest(
+                symbols=("600519",),
+                market="CN",
+                extra=(("days", 241), ("interval", "1min")),
+            )
+        )
+
+        self.assertFalse(resp.success)
+        self.assertEqual(tencent.call_count, 1)
+        self.assertEqual(eastmoney.call_count, 0)
+
 
 class TestTushareSoftDep(unittest.IsolatedAsyncioTestCase):
     async def test_tushare_missing_returns_error_not_raise(self):

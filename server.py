@@ -27,6 +27,7 @@ from src.core.scheduler import AgentScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.context_scheduler import ContextMaintenanceScheduler
+from src.core.t_monitor_scheduler import TMonitorScheduler
 from src.core.agent_runs import record_agent_run
 from src.core.log_context import install_log_record_factory, log_context
 from src.core.agent_catalog import (
@@ -49,6 +50,7 @@ scheduler: AgentScheduler | None = None
 price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
+t_monitor_scheduler: TMonitorScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1284,7 +1286,7 @@ async def lifespan(app):
 
     threading.Thread(target=refresh_stock_cache, daemon=True).start()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, t_monitor_scheduler
     scheduler = build_scheduler()
     scheduler.start()
     logger.info("Agent 调度器已启动")
@@ -1298,6 +1300,16 @@ async def lifespan(app):
         logger.info("价格提醒调度器已启动")
     except Exception as e:
         logger.error(f"价格提醒调度器启动失败: {e}")
+    try:
+        settings = Settings()
+        t_monitor_scheduler = TMonitorScheduler(
+            timezone=settings.app_timezone,
+            interval_seconds=60,
+        )
+        t_monitor_scheduler.start()
+        logger.info("底仓做T盯盘调度器已启动")
+    except Exception as e:
+        logger.error(f"底仓做T盯盘调度器启动失败: {e}")
     try:
         settings = Settings()
         paper_trading_scheduler = PaperTradingScheduler(
@@ -1327,6 +1339,9 @@ async def lifespan(app):
     if price_alert_scheduler:
         price_alert_scheduler.shutdown()
         logger.info("价格提醒调度器已关闭")
+    if t_monitor_scheduler:
+        t_monitor_scheduler.shutdown()
+        logger.info("底仓做T盯盘调度器已关闭")
     if paper_trading_scheduler:
         paper_trading_scheduler.shutdown()
         logger.info("模拟盘调度器已关闭")

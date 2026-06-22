@@ -1,9 +1,15 @@
-from src.collectors.kline_collector import KlineData
+from src.collectors.kline_collector import (
+    KlineData,
+    _parse_tencent_intraday_payload,
+    aggregate_intraday_klines,
+)
 from src.core.providers.base import ProviderRequest
 from src.core.providers.kline import eastmoney as eastmoney_module
 from src.core.providers.kline import stooq as stooq_module
+from src.core.providers.kline import tencent as tencent_module
 from src.core.providers.kline.eastmoney import EastmoneyKlineProvider
 from src.core.providers.kline.stooq import StooqKlineProvider
+from src.core.providers.kline.tencent import TencentKlineProvider
 from src.core.providers.orchestrator import KlineOrchestrator, get_kline_orchestrator
 from src.models.market import MarketCode
 
@@ -108,3 +114,70 @@ def test_stooq_provider_fetches_us_and_trims_days(monkeypatch):
 
     assert resp.success
     assert [k.date for k in resp.data] == ["2026-06-11", "2026-06-12"]
+
+
+def test_tencent_intraday_payload_normalizes_and_deduplicates():
+    payload = {
+        "data": {
+            "sh600519": {
+                "m1": [
+                    ["202606220931", "10.0", "10.1", "10.2", "9.9", "100", "1010"],
+                    ["202606220932", "10.1", "10.2", "10.3", "10.0", "120", "1224"],
+                    ["202606220932", "10.1", "10.25", "10.3", "10.0", "125", "1280"],
+                ]
+            }
+        }
+    }
+
+    rows = _parse_tencent_intraday_payload(payload, "sh600519")
+
+    assert [row.date for row in rows] == ["2026-06-22 09:31", "2026-06-22 09:32"]
+    assert rows[-1].close == 10.25
+    assert rows[-1].amount == 1280
+    assert all(row.source == "tencent" for row in rows)
+
+
+def test_tencent_intraday_aggregates_five_minutes_across_lunch():
+    rows = [
+        KlineData(date="2026-06-22 09:31", open=10, close=10.1, high=10.2, low=9.9, volume=100, amount=1000),
+        KlineData(date="2026-06-22 09:35", open=10.1, close=10.4, high=10.5, low=10.0, volume=120, amount=1240),
+        KlineData(date="2026-06-22 13:01", open=10.4, close=10.3, high=10.4, low=10.2, volume=80, amount=824),
+        KlineData(date="2026-06-22 13:05", open=10.3, close=10.6, high=10.7, low=10.3, volume=90, amount=954),
+    ]
+
+    out = aggregate_intraday_klines(rows, 5)
+
+    assert [bar.date for bar in out] == ["2026-06-22 09:35", "2026-06-22 13:05"]
+    assert out[0].open == 10
+    assert out[0].close == 10.4
+    assert out[0].volume == 220
+    assert out[0].amount == 2240
+
+
+def test_tencent_provider_serves_five_minute_from_one_minute(monkeypatch):
+    calls = []
+    rows = [
+        KlineData(date="2026-06-22 09:31", open=10, close=10.1, high=10.2, low=9.9, volume=100),
+        KlineData(date="2026-06-22 09:35", open=10.1, close=10.4, high=10.5, low=10.0, volume=120),
+    ]
+
+    def fake_intraday(symbol, market, limit):
+        calls.append((symbol, market, limit))
+        return rows
+
+    monkeypatch.setattr(tencent_module, "_fetch_tencent_intraday_klines", fake_intraday)
+    import asyncio
+
+    resp = asyncio.run(
+        TencentKlineProvider().fetch(
+            ProviderRequest(
+                symbols=("600519",),
+                market="CN",
+                extra=(("days", 240), ("interval", "5min")),
+            )
+        )
+    )
+
+    assert resp.success
+    assert [bar.date for bar in resp.data] == ["2026-06-22 09:35"]
+    assert calls == [("600519", MarketCode.CN, 320)]

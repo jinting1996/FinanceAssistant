@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from src.collectors.kline_collector import _fetch_tencent_klines
-from src.core.providers.base import KlineProvider, ProviderRequest, ProviderResponse
+from src.collectors.kline_collector import (
+    _fetch_tencent_intraday_klines,
+    _fetch_tencent_klines,
+    aggregate_intraday_klines,
+)
+from src.core.providers.base import KlineProvider, ProviderRequest, ProviderResponse, is_intraday_interval
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -15,6 +19,7 @@ logger = logging.getLogger(__name__)
 class TencentKlineProvider(KlineProvider):
     name = "tencent"
     supports_markets = {"CN", "HK", "US"}
+    supports_intraday = True
 
     def _days(self, req: ProviderRequest) -> int:
         for k, v in req.extra:
@@ -50,14 +55,30 @@ class TencentKlineProvider(KlineProvider):
         symbol = req.symbols[0]
         days = self._days(req)
         interval = self._interval(req)
-        if interval not in {"", "1d", "day", "d"}:
-            return ProviderResponse(success=False, error=f"tencent daily provider does not support interval={interval}")
         try:
-            klines = await asyncio.to_thread(
-                _fetch_tencent_klines, symbol, market_code, days
-            )
+            if is_intraday_interval(interval):
+                if market_code not in (MarketCode.CN, MarketCode.HK):
+                    return ProviderResponse(success=False, error="tencent intraday only supports CN/HK")
+                one_minute = await asyncio.to_thread(
+                    _fetch_tencent_intraday_klines,
+                    symbol,
+                    market_code,
+                    max(days, 320),
+                )
+                klines = aggregate_intraday_klines(one_minute, 5) if interval in {"5min", "5minute", "5m", "5"} else one_minute
+                if not klines:
+                    return ProviderResponse(success=False, error="tencent intraday data empty")
+            elif interval in {"", "1d", "day", "d"}:
+                klines = await asyncio.to_thread(
+                    _fetch_tencent_klines, symbol, market_code, days
+                )
+            else:
+                return ProviderResponse(success=False, error=f"tencent provider does not support interval={interval}")
         except Exception as e:
             return ProviderResponse(success=False, error=str(e))
+
+        if is_intraday_interval(interval):
+            return ProviderResponse(success=True, data=klines)
 
         if req.market == "US" and len(klines) < max(10, min(days, 30)):
             return ProviderResponse(success=False, error="tencent US daily data insufficient")

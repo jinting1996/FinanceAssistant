@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # 腾讯日K线 API
 TENCENT_KLINE_URL = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+TENCENT_MINUTE_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/kline/mkline"
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 
 
@@ -29,6 +31,7 @@ _EASTMONEY_INTRADAY_CACHE = TTLCache(
     default_ttl_sec=_EASTMONEY_INTRADAY_CACHE_TTL_SECONDS,
     max_size=2048,
 )
+_TENCENT_INTRADAY_CACHE = TTLCache(default_ttl_sec=45, max_size=2048)
 
 
 def _fetch_stooq_us_klines(symbol: str) -> list[KlineData]:
@@ -307,6 +310,7 @@ class KlineData:
     high: float
     low: float
     volume: float
+    amount: float | None = None
     source: str = ""
 
 
@@ -436,6 +440,174 @@ def _fetch_tencent_klines(
                 )
             )
     return klines
+
+
+def _normalize_tencent_minute_time(value: object, date_hint: str = "") -> str | None:
+    raw = str(value or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 12:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}"
+    if len(digits) == 4:
+        day = "".join(ch for ch in str(date_hint or "") if ch.isdigit())[:8]
+        if len(day) == 8:
+            return f"{day[:4]}-{day[4:6]}-{day[6:8]} {digits[:2]}:{digits[2:4]}"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("/", "-"))
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return None
+
+
+def _parse_tencent_intraday_payload(payload: dict, tencent_sym: str) -> list[KlineData]:
+    """Parse Tencent mkline and minute-query variants into incremental bars."""
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    stock = data.get(tencent_sym) if isinstance(data, dict) else None
+    if not isinstance(stock, dict):
+        return []
+
+    date_hint = str(stock.get("date") or "")
+    nested = stock.get("data")
+    if isinstance(nested, dict):
+        date_hint = str(nested.get("date") or date_hint)
+    raw_rows = stock.get("m1") or stock.get("minute")
+    if not raw_rows and isinstance(nested, dict):
+        raw_rows = nested.get("m1") or nested.get("data")
+    if not isinstance(raw_rows, list):
+        return []
+
+    out: list[KlineData] = []
+    prev_cumulative_volume: float | None = None
+    prev_cumulative_amount: float | None = None
+    for raw_row in raw_rows:
+        parts = raw_row.split() if isinstance(raw_row, str) else raw_row
+        if not isinstance(parts, (list, tuple)) or len(parts) < 4:
+            continue
+        timestamp = _normalize_tencent_minute_time(parts[0], date_hint)
+        if not timestamp:
+            continue
+        try:
+            if len(parts) >= 6:
+                open_price = float(parts[1])
+                close = float(parts[2])
+                high = float(parts[3])
+                low = float(parts[4])
+                volume = max(0.0, float(parts[5]))
+                amount = float(parts[6]) if len(parts) > 6 and parts[6] not in (None, "") else None
+            else:
+                # Tencent minute-query points: time, price, cumulative volume, cumulative amount.
+                close = float(parts[1])
+                open_price = high = low = close
+                cumulative_volume = max(0.0, float(parts[2]))
+                cumulative_amount = max(0.0, float(parts[3]))
+                volume = (
+                    max(0.0, cumulative_volume - prev_cumulative_volume)
+                    if prev_cumulative_volume is not None
+                    else cumulative_volume
+                )
+                amount = (
+                    max(0.0, cumulative_amount - prev_cumulative_amount)
+                    if prev_cumulative_amount is not None
+                    else cumulative_amount
+                )
+                prev_cumulative_volume = cumulative_volume
+                prev_cumulative_amount = cumulative_amount
+        except (TypeError, ValueError):
+            continue
+        if min(open_price, close, high, low) <= 0 or high < low:
+            continue
+        out.append(
+            KlineData(
+                date=timestamp,
+                open=open_price,
+                close=close,
+                high=high,
+                low=low,
+                volume=volume,
+                amount=amount,
+                source="tencent",
+            )
+        )
+
+    by_time = {bar.date: bar for bar in out}
+    return [by_time[key] for key in sorted(by_time)]
+
+
+def _fetch_tencent_intraday_klines(
+    symbol: str,
+    market: MarketCode,
+    limit: int = 320,
+) -> list[KlineData]:
+    """Fetch Tencent one-minute K-lines without Eastmoney fallback."""
+
+    if market not in (MarketCode.CN, MarketCode.HK):
+        return []
+    tencent_sym = _tencent_symbol(symbol, market)
+    safe_limit = min(max(1, int(limit or 320)), 1200)
+    cache_key = f"{market.value}:{symbol}:m1:{safe_limit}"
+    cached = _TENCENT_INTRADAY_CACHE.get(cache_key)
+    if cached:
+        return cached
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://gu.qq.com/",
+    }
+    with httpx.Client(follow_redirects=True, timeout=10, headers=headers) as client:
+        response = client.get(
+            TENCENT_MINUTE_KLINE_URL,
+            params={"param": f"{tencent_sym},m1,,{safe_limit}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    rows = _parse_tencent_intraday_payload(payload, tencent_sym)
+    if rows:
+        rows = rows[-safe_limit:]
+        _TENCENT_INTRADAY_CACHE.set(cache_key, rows)
+    return rows
+
+
+def aggregate_intraday_klines(klines: list[KlineData], minutes: int = 5) -> list[KlineData]:
+    """Aggregate one-minute bars inside each CN/HK trading session."""
+
+    size = max(1, int(minutes or 5))
+    buckets: dict[tuple[str, str, int], list[tuple[datetime, KlineData]]] = {}
+    for bar in klines or []:
+        try:
+            dt = datetime.strptime(bar.date, "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+        clock = dt.hour * 60 + dt.minute
+        if 9 * 60 + 30 <= clock <= 12 * 60:
+            session, start = "am", 9 * 60 + 30
+        elif 13 * 60 <= clock <= 16 * 60:
+            session, start = "pm", 13 * 60
+        else:
+            continue
+        offset = max(1, clock - start)
+        slot = (offset - 1) // size
+        buckets.setdefault((dt.strftime("%Y-%m-%d"), session, slot), []).append((dt, bar))
+
+    out: list[KlineData] = []
+    for items in buckets.values():
+        items.sort(key=lambda item: item[0])
+        first = items[0][1]
+        last = items[-1][1]
+        amounts = [bar.amount for _, bar in items if bar.amount is not None]
+        out.append(
+            KlineData(
+                date=last.date,
+                open=first.open,
+                close=last.close,
+                high=max(bar.high for _, bar in items),
+                low=min(bar.low for _, bar in items),
+                volume=sum(bar.volume for _, bar in items),
+                amount=sum(amounts) if len(amounts) == len(items) else None,
+                source="tencent",
+            )
+        )
+    out.sort(key=lambda bar: bar.date)
+    return out
 
 
 def _calculate_ma(closes: list[float], period: int) -> float | None:

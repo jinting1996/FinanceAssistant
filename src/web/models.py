@@ -119,6 +119,7 @@ class Position(Base):
     )
     cost_price = Column(Float, nullable=False)  # 成本价
     quantity = Column(Integer, nullable=False)  # 持仓数量
+    sellable_quantity = Column(Integer, nullable=True)  # 当日可卖底仓数量
     invested_amount = Column(Float, nullable=True)  # 投入资金（用于盘中监控）
     sort_order = Column(Integer, default=0)
     trading_style = Column(
@@ -129,6 +130,68 @@ class Position(Base):
 
     account = relationship("Account", back_populates="positions")
     stock = relationship("Stock", back_populates="positions")
+
+
+class TMonitorState(Base):
+    """底仓做 T 策略的日内状态机。"""
+
+    __tablename__ = "t_monitor_states"
+    __table_args__ = (
+        UniqueConstraint("position_id", "trade_date", name="uq_t_monitor_position_day"),
+        Index("ix_t_monitor_state_day", "trade_date", "state"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    position_id = Column(Integer, ForeignKey("positions.id", ondelete="CASCADE"), nullable=False)
+    trade_date = Column(String, nullable=False)
+    state = Column(String, nullable=False, default="idle")
+    cycle_count = Column(Integer, nullable=False, default=0)
+    score = Column(Float, nullable=False, default=0)
+    recommended_quantity = Column(Integer, nullable=False, default=0)
+    entry_price = Column(Float, nullable=True)
+    current_price = Column(Float, nullable=True)
+    vwap = Column(Float, nullable=True)
+    support_price = Column(Float, nullable=True)
+    stop_loss_price = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    signal_expires_at = Column(DateTime, nullable=True)
+    last_signal_id = Column(String, default="")
+    last_signal_at = Column(DateTime, nullable=True)
+    context = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class TSignalEvent(Base):
+    """做 T 信号及通知审计记录。"""
+
+    __tablename__ = "t_signal_events"
+    __table_args__ = (
+        UniqueConstraint("signal_id", name="uq_t_signal_event_signal_id"),
+        Index("ix_t_signal_position_time", "position_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_id = Column(Integer, ForeignKey("t_monitor_states.id", ondelete="CASCADE"), nullable=False)
+    position_id = Column(Integer, ForeignKey("positions.id", ondelete="CASCADE"), nullable=False)
+    signal_id = Column(String, nullable=False)
+    trade_date = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    score = Column(Float, nullable=False, default=0)
+    current_price = Column(Float, nullable=True)
+    vwap = Column(Float, nullable=True)
+    support_price = Column(Float, nullable=True)
+    stop_loss_price = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    recommended_quantity = Column(Integer, nullable=False, default=0)
+    position_ratio = Column(Float, nullable=False, default=0.2)
+    reason = Column(String, default="")
+    invalidation = Column(String, default="")
+    data_quality = Column(String, default="")
+    payload = Column(JSON, default={})
+    notify_success = Column(Boolean, nullable=False, default=False)
+    notify_error = Column(String, default="")
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class StockAgent(Base):

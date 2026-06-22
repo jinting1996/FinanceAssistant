@@ -34,6 +34,7 @@ from src.web.api import (
     system,
     tasks,
     backtests,
+    t_monitor,
 )
 from src.web.api import insights
 from src.web.api.auth import get_current_user
@@ -199,6 +200,12 @@ app.include_router(
     backtests.router,
     prefix="/api/backtests",
     tags=["backtests"],
+    dependencies=protected,
+)
+app.include_router(
+    t_monitor.router,
+    prefix="/api/t-monitor",
+    tags=["t-monitor"],
     dependencies=protected,
 )
 app.include_router(

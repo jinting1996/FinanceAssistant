@@ -1944,6 +1944,82 @@ def _m005_legacy_remove_stock_enabled(engine: Engine) -> None:
     database._migrate_remove_stock_enabled(engine)
 
 
+def _m123_base_position_vwap_t(conn: Connection) -> None:
+    _add_column_if_missing(
+        conn,
+        "positions",
+        "sellable_quantity",
+        "ALTER TABLE positions ADD COLUMN sellable_quantity INTEGER",
+    )
+    if _has_table(conn, "positions"):
+        conn.execute(
+            text(
+                "UPDATE positions SET sellable_quantity = quantity "
+                "WHERE sellable_quantity IS NULL"
+            )
+        )
+    conn.execute(text("""
+CREATE TABLE IF NOT EXISTS t_monitor_states (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+    trade_date VARCHAR NOT NULL,
+    state VARCHAR NOT NULL DEFAULT 'idle',
+    cycle_count INTEGER NOT NULL DEFAULT 0,
+    score REAL NOT NULL DEFAULT 0,
+    recommended_quantity INTEGER NOT NULL DEFAULT 0,
+    entry_price REAL,
+    current_price REAL,
+    vwap REAL,
+    support_price REAL,
+    stop_loss_price REAL,
+    target_price REAL,
+    signal_expires_at DATETIME,
+    last_signal_id VARCHAR DEFAULT '',
+    last_signal_at DATETIME,
+    context JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_t_monitor_position_day UNIQUE(position_id, trade_date)
+)
+"""))
+    conn.execute(text("""
+CREATE TABLE IF NOT EXISTS t_signal_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_id INTEGER NOT NULL REFERENCES t_monitor_states(id) ON DELETE CASCADE,
+    position_id INTEGER NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+    signal_id VARCHAR NOT NULL,
+    trade_date VARCHAR NOT NULL,
+    action VARCHAR NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    current_price REAL,
+    vwap REAL,
+    support_price REAL,
+    stop_loss_price REAL,
+    target_price REAL,
+    recommended_quantity INTEGER NOT NULL DEFAULT 0,
+    position_ratio REAL NOT NULL DEFAULT 0.2,
+    reason VARCHAR DEFAULT '',
+    invalidation VARCHAR DEFAULT '',
+    data_quality VARCHAR DEFAULT '',
+    payload JSON DEFAULT '{}',
+    notify_success BOOLEAN NOT NULL DEFAULT 0,
+    notify_error VARCHAR DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_t_signal_event_signal_id UNIQUE(signal_id)
+)
+"""))
+    _create_index_if_missing(
+        conn,
+        "ix_t_monitor_state_day",
+        "CREATE INDEX ix_t_monitor_state_day ON t_monitor_states(trade_date, state)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_t_signal_position_time",
+        "CREATE INDEX ix_t_signal_position_time ON t_signal_events(position_id, created_at)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "legacy_schema_and_columns", _m001_legacy_schema_columns, imperative=True),
     Migration(2, "legacy_old_providers", _m002_legacy_old_providers, imperative=True),
@@ -1972,6 +2048,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(120, "screener_task_fields", _m120_screener_task_fields),
     Migration(121, "strategy_pool_fields", _m121_strategy_pool_fields),
     Migration(122, "backtest_tables", _m122_backtest_tables),
+    Migration(123, "base_position_vwap_t", _m123_base_position_vwap_t),
 )
 
 

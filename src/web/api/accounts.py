@@ -117,6 +117,7 @@ class PositionCreate(BaseModel):
     stock_id: int
     cost_price: float
     quantity: int
+    sellable_quantity: int | None = None
     invested_amount: float | None = None
     trading_style: str | None = None  # short: 短线, swing: 波段, long: 长线
 
@@ -124,6 +125,7 @@ class PositionCreate(BaseModel):
 class PositionUpdate(BaseModel):
     cost_price: float | None = None
     quantity: int | None = None
+    sellable_quantity: int | None = None
     invested_amount: float | None = None
     trading_style: str | None = None
 
@@ -134,6 +136,7 @@ class PositionResponse(BaseModel):
     stock_id: int
     cost_price: float
     quantity: int
+    sellable_quantity: int | None
     invested_amount: float | None
     sort_order: int
     trading_style: str | None
@@ -240,6 +243,7 @@ def list_positions(
             "stock_id": pos.stock_id,
             "cost_price": pos.cost_price,
             "quantity": pos.quantity,
+            "sellable_quantity": pos.sellable_quantity,
             "invested_amount": pos.invested_amount,
             "sort_order": pos.sort_order or 0,
             "trading_style": pos.trading_style,
@@ -279,6 +283,7 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db)):
         stock_id=data.stock_id,
         cost_price=data.cost_price,
         quantity=data.quantity,
+        sellable_quantity=min(max(data.sellable_quantity if data.sellable_quantity is not None else data.quantity, 0), data.quantity),
         invested_amount=data.invested_amount,
         sort_order=int(max_order) + 1,
         trading_style=data.trading_style,
@@ -294,6 +299,7 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db)):
         "stock_id": position.stock_id,
         "cost_price": position.cost_price,
         "quantity": position.quantity,
+        "sellable_quantity": position.sellable_quantity,
         "invested_amount": position.invested_amount,
         "sort_order": position.sort_order or 0,
         "trading_style": position.trading_style,
@@ -314,6 +320,10 @@ def update_position(position_id: int, data: PositionUpdate, db: Session = Depend
         position.cost_price = data.cost_price
     if data.quantity is not None:
         position.quantity = data.quantity
+        if position.sellable_quantity is not None:
+            position.sellable_quantity = min(position.sellable_quantity, data.quantity)
+    if data.sellable_quantity is not None:
+        position.sellable_quantity = min(max(data.sellable_quantity, 0), position.quantity)
     if data.invested_amount is not None:
         position.invested_amount = data.invested_amount
     if data.trading_style is not None:
@@ -330,6 +340,7 @@ def update_position(position_id: int, data: PositionUpdate, db: Session = Depend
         "stock_id": position.stock_id,
         "cost_price": position.cost_price,
         "quantity": position.quantity,
+        "sellable_quantity": position.sellable_quantity,
         "invested_amount": position.invested_amount,
         "sort_order": position.sort_order or 0,
         "trading_style": position.trading_style,
@@ -492,6 +503,7 @@ def get_portfolio_summary(
                 "market": stock.market,
                 "cost_price": pos.cost_price,
                 "quantity": pos.quantity,
+                "sellable_quantity": pos.sellable_quantity,
                 "invested_amount": pos.invested_amount,
                 "sort_order": pos.sort_order or 0,
                 "trading_style": pos.trading_style,

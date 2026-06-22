@@ -65,20 +65,21 @@ def _signal(
 
 
 def test_strategy_pool_seeds_default_builtin_strategies(monkeypatch, tmp_path):
-    """策略池 — 默认初始化返回 8 个内置策略且带新字段"""
+    """策略池 — 默认初始化返回 9 个内置策略且带新字段"""
     Session = _session_factory(tmp_path)
     _patch_sessions(monkeypatch, Session)
 
     data = strategy_pool.list_strategy_pool(enabled_only=False)
     items = data["items"]
 
-    assert len(items) == 8
+    assert len(items) == 9
     assert {item["strategy_type"] for item in items} == {"builtin"}
     assert {item["code"] for item in items} >= {
         "trend_follow",
         "macd_golden",
         "market_scan",
         "price_action",
+        "base_position_vwap_t",
     }
     assert all("run_config" in item for item in items)
     assert all("auto_run_enabled" in item for item in items)
