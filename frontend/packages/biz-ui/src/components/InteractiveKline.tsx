@@ -392,14 +392,15 @@ export default function InteractiveKline(props: {
     const ma5 = sma(closes, 5)
     const ma10 = sma(closes, 10)
     const ma20 = sma(closes, 20)
-    // 分时均价线:开盘至今累计成交额/累计成交量(缺成交额时用收盘价×量兜底),即盘中 VWAP 曲线。
+    // 分时均价线:开盘至今的成交量加权均价(收盘价×量累计)。
+    // 不直接用 amount/volume:行情源 amount 为元、volume 为手(1手=100股),
+    // 二者相除会得到价格×100(如 72.89→7289);用 close×volume 则单位自相消、稳健。
     let cumAmt = 0
     let cumVol = 0
     const avgPrice = klines.map(k => {
       const vol = k.volume || 0
-      const amt = k.amount != null && k.amount > 0 ? k.amount : k.close * vol
       cumVol += vol
-      cumAmt += amt
+      cumAmt += k.close * vol
       return cumVol > 0 ? cumAmt / cumVol : k.close
     })
     const volRaw = klines.map(k => k.volume || 0)
