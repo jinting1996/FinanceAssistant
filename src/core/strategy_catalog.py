@@ -234,6 +234,32 @@ def get_strategy_profile_map() -> dict[str, dict]:
     return {x["code"]: x for x in rows}
 
 
+def get_strategy_params(code: str) -> dict:
+    ensure_strategy_catalog()
+    db = SessionLocal()
+    try:
+        row = db.query(StrategyCatalog).filter(StrategyCatalog.code == code).first()
+        return dict(row.params or {}) if row else {}
+    finally:
+        db.close()
+
+
+def update_strategy_params(code: str, partial: dict) -> dict:
+    """合并更新某策略的 params(整列重新赋值以触发 JSON 变更检测)。"""
+    ensure_strategy_catalog()
+    db = SessionLocal()
+    try:
+        row = db.query(StrategyCatalog).filter(StrategyCatalog.code == code).first()
+        if not row:
+            raise KeyError("strategy not found")
+        merged = {**(row.params or {}), **(partial or {})}
+        row.params = merged
+        db.commit()
+        return dict(merged)
+    finally:
+        db.close()
+
+
 def get_effective_weight_map(*, market: str = "ALL", regime: str = "default") -> dict[str, float]:
     ensure_strategy_catalog()
     mkt = (market or "ALL").strip().upper() or "ALL"

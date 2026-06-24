@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Settings2 } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Badge } from '@panwatch/base-ui/components/ui/badge'
@@ -59,6 +59,8 @@ export default function TMonitorPanel() {
   const [leg, setLeg] = useState<{ row: TMonitorState; action: LegAction } | null>(null)
   const [legPrice, setLegPrice] = useState('')
   const [legQty, setLegQty] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [params, setParams] = useState<Record<string, any>>({})
   const { toast } = useToast()
 
   const load = useCallback(async () => {
@@ -126,6 +128,39 @@ export default function TMonitorPanel() {
     }
   }
 
+  const openSettings = async () => {
+    try {
+      const p = await fetchAPI<Record<string, unknown>>('/t-monitor/params')
+      setParams(p || {})
+      setSettingsOpen(true)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '读取参数失败', 'error')
+    }
+  }
+
+  const setParam = (key: string, value: unknown) => setParams(prev => ({ ...prev, [key]: value }))
+
+  const saveSettings = async () => {
+    try {
+      const body = {
+        direction: params.direction,
+        exit_mode: params.exit_mode,
+        min_score: Number(params.min_score),
+        position_ratio: Number(params.position_ratio),
+        max_cycles_per_day: Number(params.max_cycles_per_day),
+        cycle_cooldown_minutes: Number(params.cycle_cooldown_minutes),
+        trail_pct: Number(params.trail_pct),
+        profit_atr_mult: Number(params.profit_atr_mult),
+        stop_atr_mult: Number(params.stop_atr_mult),
+      }
+      await fetchAPI('/t-monitor/params', { method: 'PUT', body: JSON.stringify(body) })
+      toast('参数已保存', 'success')
+      setSettingsOpen(false)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '保存失败', 'error')
+    }
+  }
+
   return (
     <div className="card p-4 mb-4">
       <div className="flex items-center justify-between gap-3 mb-3">
@@ -133,9 +168,14 @@ export default function TMonitorPanel() {
           <div className="text-[13px] font-semibold text-foreground">底仓 VWAP 回归做T</div>
           <div className="text-[11px] text-muted-foreground mt-0.5">仅监控 A 股持仓并提醒，不自动交易；低吸后须确认才会监控卖点</div>
         </div>
-        <Button size="sm" variant="outline" onClick={scan} disabled={loading}>
-          <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />立即扫描
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={openSettings}>
+            <Settings2 className="w-3.5 h-3.5 mr-1.5" />参数
+          </Button>
+          <Button size="sm" variant="outline" onClick={scan} disabled={loading}>
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />立即扫描
+          </Button>
+        </div>
       </div>
       {rows.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border/60 py-5 text-center text-[12px] text-muted-foreground">尚无今日扫描结果</div>
@@ -238,6 +278,90 @@ export default function TMonitorPanel() {
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="outline" size="sm" onClick={() => setLeg(null)}>取消</Button>
               <Button size="sm" onClick={submitLeg}>确认</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-md max-h-[82vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-[15px]">做T 策略参数</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-[12px]">
+            <div>
+              <Label>方向</Label>
+              <select
+                value={params.direction || 'both'}
+                onChange={e => setParam('direction', e.target.value)}
+                className="mt-1 w-full h-8 rounded-md border border-border bg-background px-2 text-[12px]"
+              >
+                <option value="both">双向(正T + 倒T)</option>
+                <option value="long">仅正T(先低吸后卖)</option>
+                <option value="short">仅倒T(先高抛后买回)</option>
+              </select>
+            </div>
+            <div>
+              <Label>离场方式</Label>
+              <select
+                value={params.exit_mode || 'price'}
+                onChange={e => setParam('exit_mode', e.target.value)}
+                className="mt-1 w-full h-8 rounded-md border border-border bg-background px-2 text-[12px]"
+              >
+                <option value="price">固定价(到目标就走,可预期)</option>
+                <option value="trail">跟踪止盈(跟着趋势多吃)</option>
+                <option value="price_or_score">价格或评分(可提前出)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>触发分</Label>
+                <Input value={params.min_score ?? ''} onChange={e => setParam('min_score', e.target.value)} inputMode="numeric" className="font-mono mt-1 h-8" />
+                <p className="text-[11px] text-muted-foreground mt-0.5">≥此分才出信号(满分100,越高越严)</p>
+              </div>
+              <div>
+                <Label>仓位比例</Label>
+                <Input value={params.position_ratio ?? ''} onChange={e => setParam('position_ratio', e.target.value)} inputMode="decimal" className="font-mono mt-1 h-8" />
+                <p className="text-[11px] text-muted-foreground mt-0.5">每轮动用可卖底仓比例(0.2=20%)</p>
+              </div>
+              <div>
+                <Label>当日轮数</Label>
+                <Input value={params.max_cycles_per_day ?? ''} onChange={e => setParam('max_cycles_per_day', e.target.value)} inputMode="numeric" className="font-mono mt-1 h-8" />
+                <p className="text-[11px] text-muted-foreground mt-0.5">每票当日最多做几轮(0=不限)</p>
+              </div>
+              <div>
+                <Label>轮间冷却(分)</Label>
+                <Input value={params.cycle_cooldown_minutes ?? ''} onChange={e => setParam('cycle_cooldown_minutes', e.target.value)} inputMode="numeric" className="font-mono mt-1 h-8" />
+                <p className="text-[11px] text-muted-foreground mt-0.5">完成一轮后多久才再开</p>
+              </div>
+              <div>
+                <Label>跟踪回撤</Label>
+                <Input value={params.trail_pct ?? ''} onChange={e => setParam('trail_pct', e.target.value)} inputMode="decimal" className="font-mono mt-1 h-8" />
+                <p className="text-[11px] text-muted-foreground mt-0.5">trail模式:自极值回撤多少离场(0.003=0.3%)</p>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-primary/20 bg-primary/5 p-2.5">
+              <Label>止盈 ATR 倍数(profit_atr_mult)</Label>
+              <Input value={params.profit_atr_mult ?? ''} onChange={e => setParam('profit_atr_mult', e.target.value)} inputMode="decimal" className="font-mono mt-1 h-8" />
+              <p className="text-[11px] text-muted-foreground mt-1 leading-4">
+                控制<b>止盈目标随股票波动放大多少</b>。止盈 = max(地板0.8%, <b>该倍数 × 日波动ATR/股价</b>)。
+                倍数越大 → 振幅大的票止盈挂得越远、一轮想吃的价差越大;0.5 ≈ 吃半个日波幅。振幅小的票仍走 0.8% 地板,无需手动按票调。
+              </p>
+            </div>
+            <div className="rounded-md border border-rose-500/20 bg-rose-500/5 p-2.5">
+              <Label>止损 ATR 倍数(stop_atr_mult)</Label>
+              <Input value={params.stop_atr_mult ?? ''} onChange={e => setParam('stop_atr_mult', e.target.value)} inputMode="decimal" className="font-mono mt-1 h-8" />
+              <p className="text-[11px] text-muted-foreground mt-1 leading-4">
+                控制<b>止损上限随波动放宽多少</b>。止损上限 = max(地板1.5%, <b>该倍数 × ATR/股价</b>)。
+                倍数越大 → 振幅大的票允许的止损更宽(信号不易被 1.5% 卡掉,但单次亏损上限更大);越小 → 止损更紧、过滤更多。
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" onClick={() => setSettingsOpen(false)}>取消</Button>
+              <Button size="sm" onClick={saveSettings}>保存</Button>
             </div>
           </div>
         </DialogContent>

@@ -35,6 +35,62 @@ def _state_dict(row: TMonitorState, position: Position, stock: Stock) -> dict:
     }
 
 
+T_STRATEGY_CODE = "base_position_vwap_t"
+
+
+@router.get("/params")
+def get_params() -> dict:
+    """读取做T策略当前参数。"""
+    from src.core.strategy_catalog import get_strategy_params
+
+    return get_strategy_params(T_STRATEGY_CODE)
+
+
+class TParamsUpdate(BaseModel):
+    direction: str | None = None        # both / long / short
+    exit_mode: str | None = None        # price / trail / price_or_score
+    min_score: int | None = None
+    position_ratio: float | None = None
+    max_cycles_per_day: int | None = None
+    cycle_cooldown_minutes: int | None = None
+    trail_pct: float | None = None
+    profit_atr_mult: float | None = None
+    stop_atr_mult: float | None = None
+    min_profit_pct: float | None = None
+    max_stop_pct: float | None = None
+
+
+@router.put("/params")
+def put_params(payload: TParamsUpdate) -> dict:
+    """更新做T策略参数(仅合并提供的字段,带基本校验)。"""
+    from src.core.strategy_catalog import update_strategy_params
+
+    raw = payload.model_dump(exclude_none=True)
+    if not raw:
+        raise HTTPException(400, "没有可更新的参数")
+    partial: dict = {}
+    if "direction" in raw:
+        if raw["direction"] not in ("both", "long", "short"):
+            raise HTTPException(400, "direction 仅支持 both/long/short")
+        partial["direction"] = raw["direction"]
+    if "exit_mode" in raw:
+        if raw["exit_mode"] not in ("price", "trail", "price_or_score"):
+            raise HTTPException(400, "exit_mode 仅支持 price/trail/price_or_score")
+        partial["exit_mode"] = raw["exit_mode"]
+    if "min_score" in raw:
+        partial["min_score"] = max(0, min(100, int(raw["min_score"])))
+    if "position_ratio" in raw:
+        partial["position_ratio"] = max(0.0, min(1.0, float(raw["position_ratio"])))
+    if "max_cycles_per_day" in raw:
+        partial["max_cycles_per_day"] = max(0, int(raw["max_cycles_per_day"]))
+    if "cycle_cooldown_minutes" in raw:
+        partial["cycle_cooldown_minutes"] = max(0, int(raw["cycle_cooldown_minutes"]))
+    for key in ("trail_pct", "profit_atr_mult", "stop_atr_mult", "min_profit_pct", "max_stop_pct"):
+        if key in raw:
+            partial[key] = max(0.0, float(raw[key]))
+    return update_strategy_params(T_STRATEGY_CODE, partial)
+
+
 @router.get("/states")
 def list_states(db: Session = Depends(get_db)) -> list[dict]:
     rows = (
