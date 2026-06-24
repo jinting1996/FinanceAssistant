@@ -156,35 +156,59 @@ class TMonitorEngine:
             db.flush()
 
         current = float(getattr(minute[-1], "close", 0) if not isinstance(minute[-1], dict) else minute[-1].get("close", 0))
+        thresholds = dict(
+            min_score=int(params.get("min_score", 70)),
+            min_vwap_deviation_pct=float(params.get("min_vwap_deviation_pct", 0.003)),
+            min_profit_pct=float(params.get("min_profit_pct", 0.008)),
+            max_stop_pct=float(params.get("max_stop_pct", 0.015)),
+        )
 
-        # --- 离场态:正T 等卖出 / 倒T 等买回 ---
+        # --- 离场态:实时重算"离场质量分"(平仓本质是反向入场),价格阈值或评分任一满足即触发 ---
         if state.state == "waiting_exit":
-            action = evaluate_t_exit(
+            # 正T 卖出 = 高抛质量(反向 short 入场分)
+            price_hit = evaluate_t_exit(
                 current,
                 vwap=float(state.vwap or current),
                 target_price=float(state.target_price or current),
                 stop_loss_price=float(state.stop_loss_price or 0),
             )
+            sell_sig = compute_base_position_vwap_t_short(daily, minute, **thresholds)
             state.current_price = current
-            if action in {"sell_t", "invalidated"}:
-                state.state = "sell_t_notified" if action == "sell_t" else "invalidated"
-                event = await self._create_event(db, state, position, stock, action, "价格回归 VWAP/目标位" if action == "sell_t" else "价格跌破止损位")
-                return {"position_id": position.id, "status": action, "event_id": event.id}
-            return {"position_id": position.id, "status": "waiting_exit"}
+            state.score = sell_sig.score
+            state.context = {**(state.context or {}), "exit_score": sell_sig.score, "exit_reason": sell_sig.reason}
+            if price_hit == "invalidated":
+                state.state = "invalidated"
+                event = await self._create_event(db, state, position, stock, "invalidated", "价格跌破止损位")
+                return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
+            if price_hit == "sell_t" or sell_sig.action == "sell_open":
+                state.state = "sell_t_notified"
+                reason = "价格回归 VWAP/目标位" if price_hit == "sell_t" else f"高抛质量达标(分{sell_sig.score}):{sell_sig.reason}"
+                event = await self._create_event(db, state, position, stock, "sell_t", reason)
+                return {"position_id": position.id, "status": "sell_t", "event_id": event.id}
+            return {"position_id": position.id, "status": "waiting_exit", "score": sell_sig.score}
 
         if state.state == "waiting_buyback":
-            action = evaluate_t_exit_short(
+            # 倒T 买回 = 低吸质量(反向 long 入场分)
+            price_hit = evaluate_t_exit_short(
                 current,
                 vwap=float(state.vwap or current),
                 target_price=float(state.target_price or current),
                 stop_loss_price=float(state.stop_loss_price or current),
             )
+            buy_sig = compute_base_position_vwap_t(daily, minute, **thresholds)
             state.current_price = current
-            if action in {"buy_back", "invalidated"}:
-                state.state = "buy_back_notified" if action == "buy_back" else "invalidated"
-                event = await self._create_event(db, state, position, stock, action, "价格回落 VWAP/目标位" if action == "buy_back" else "价格突破止损位")
-                return {"position_id": position.id, "status": action, "event_id": event.id}
-            return {"position_id": position.id, "status": "waiting_buyback"}
+            state.score = buy_sig.score
+            state.context = {**(state.context or {}), "buyback_score": buy_sig.score, "buyback_reason": buy_sig.reason}
+            if price_hit == "invalidated":
+                state.state = "invalidated"
+                event = await self._create_event(db, state, position, stock, "invalidated", "价格突破止损位")
+                return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
+            if price_hit == "buy_back" or buy_sig.action == "buy_t":
+                state.state = "buy_back_notified"
+                reason = "价格回落 VWAP/目标位" if price_hit == "buy_back" else f"低吸质量达标(分{buy_sig.score}):{buy_sig.reason}"
+                event = await self._create_event(db, state, position, stock, "buy_back", reason)
+                return {"position_id": position.id, "status": "buy_back", "event_id": event.id}
+            return {"position_id": position.id, "status": "waiting_buyback", "score": buy_sig.score}
 
         # --- 开仓通知态超过确认有效期则失效 ---
         if state.state in {"buy_t_notified", "sell_open_notified"} and state.signal_expires_at and state.signal_expires_at < _now():
@@ -198,12 +222,6 @@ class TMonitorEngine:
 
         # --- idle:按方向计算多/空入场信号,谁满足谁触发(同分优先正T) ---
         direction = str(params.get("direction", "both") or "both").lower()
-        thresholds = dict(
-            min_score=int(params.get("min_score", 70)),
-            min_vwap_deviation_pct=float(params.get("min_vwap_deviation_pct", 0.003)),
-            min_profit_pct=float(params.get("min_profit_pct", 0.008)),
-            max_stop_pct=float(params.get("max_stop_pct", 0.015)),
-        )
         position_ratio = min(max(float(params.get("position_ratio", self.position_ratio)), 0.0), 0.3)
         sellable = max(int(position.sellable_quantity if position.sellable_quantity is not None else position.quantity), 0)
 

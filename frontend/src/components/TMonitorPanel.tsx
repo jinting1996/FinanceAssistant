@@ -153,7 +153,11 @@ export default function TMonitorPanel() {
                       {short ? '倒T' : '正T'}
                     </Badge>
                   )}
-                  {row.state === 'idle' && <Badge variant="secondary">T Score {Math.round(row.score)}</Badge>}
+                  {['idle', 'waiting_exit', 'waiting_buyback'].includes(row.state) && (
+                    <Badge variant="secondary" title={row.state === 'waiting_buyback' ? '买回质量分' : row.state === 'waiting_exit' ? '卖出质量分' : '入场质量分'}>
+                      {row.state === 'waiting_buyback' ? '买回分' : row.state === 'waiting_exit' ? '卖出分' : 'T Score'} {Math.round(row.score)}
+                    </Badge>
+                  )}
                   <Badge>{stateLabels[row.state] || row.state}</Badge>
                 </div>
               </div>
