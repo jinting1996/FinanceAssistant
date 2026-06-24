@@ -46,7 +46,7 @@ def _row_time(row: Any) -> str:
 
 class TMonitorEngine:
     position_ratio = 0.2
-    max_cycles_per_day = 1
+    max_cycles_per_day = 5  # 当日最多做T轮数;0 表示不限
     signal_ttl_minutes = 10
 
     async def _notify(self, db: Session, event: TSignalEvent, stock: Stock) -> None:
@@ -216,9 +216,22 @@ class TMonitorEngine:
             event = await self._create_event(db, state, position, stock, "invalidated", "做T信号超过确认有效期")
             return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
 
-        max_cycles = max(1, int(params.get("max_cycles_per_day", self.max_cycles_per_day)))
-        if state.state != "idle" or state.cycle_count >= max_cycles:
+        # 当日做T次数上限:<=0 表示不限。完成一轮后(state=completed)仍可在限额内继续找机会。
+        max_cycles = int(params.get("max_cycles_per_day", self.max_cycles_per_day))
+        unlimited = max_cycles <= 0
+        if not unlimited and state.cycle_count >= max_cycles:
             return {"position_id": position.id, "status": state.state}
+        if state.state not in {"idle", "completed"}:
+            return {"position_id": position.id, "status": state.state}
+        # 完成一轮后冷却,避免高频扫描下立刻又开仓(0=不冷却)
+        cooldown_min = int(params.get("cycle_cooldown_minutes", 3))
+        if (
+            state.state == "completed"
+            and cooldown_min > 0
+            and state.last_signal_at
+            and (_now() - state.last_signal_at) < timedelta(minutes=cooldown_min)
+        ):
+            return {"position_id": position.id, "status": "completed"}
 
         # --- idle:按方向计算多/空入场信号,谁满足谁触发(同分优先正T) ---
         direction = str(params.get("direction", "both") or "both").lower()

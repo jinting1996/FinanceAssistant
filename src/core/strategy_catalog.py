@@ -83,7 +83,8 @@ DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
         params={
             "min_score": 70,
             "position_ratio": 0.2,
-            "max_cycles_per_day": 1,
+            "max_cycles_per_day": 5,  # 当日最多做T轮数,0=不限
+            "cycle_cooldown_minutes": 3,  # 两轮之间冷却分钟,0=不冷却
             "signal_ttl_minutes": 10,
             "min_vwap_deviation_pct": 0.003,
             "min_profit_pct": 0.008,
