@@ -162,10 +162,14 @@ class TMonitorEngine:
             min_profit_pct=float(params.get("min_profit_pct", 0.008)),
             max_stop_pct=float(params.get("max_stop_pct", 0.015)),
         )
-        # 离场方式:price=仅固定价触发(分数只显示) / price_or_score=价格或评分任一触发
-        score_exit = str(params.get("exit_mode", "price")).lower() == "price_or_score"
+        # 离场方式:price=仅固定价触发 / price_or_score=价格或评分任一 / trail=跟踪止盈(尽量多吃)
+        exit_mode = str(params.get("exit_mode", "price")).lower()
+        score_exit = exit_mode == "price_or_score"
+        trail_mode = exit_mode == "trail"
+        trail_pct = max(0.0, float(params.get("trail_pct", 0.003)))
+        min_profit = thresholds["min_profit_pct"]
 
-        # --- 离场态:实时重算"离场质量分"(平仓本质是反向入场),价格阈值或评分任一满足即触发 ---
+        # --- 离场态:实时重算"离场质量分"(平仓本质是反向入场) ---
         if state.state == "waiting_exit":
             # 正T 卖出 = 高抛质量(反向 short 入场分)
             price_hit = evaluate_t_exit(
@@ -175,16 +179,33 @@ class TMonitorEngine:
                 stop_loss_price=float(state.stop_loss_price or 0),
             )
             sell_sig = compute_base_position_vwap_t_short(daily, minute, **thresholds)
+            entry = float(state.entry_price or current)
+            ctx = {**(state.context or {}), "exit_score": sell_sig.score, "exit_reason": sell_sig.reason}
+            # 跟踪止盈:进入盈利区后记录最高价,自高点回落 trail_pct 才卖
+            trail_hit = False
+            if trail_mode:
+                in_profit = current >= entry * (1 + min_profit)
+                peak = float(ctx.get("extreme_price") or current)
+                if in_profit:
+                    peak = max(peak, current)
+                    ctx["extreme_price"] = peak
+                    trail_hit = current <= peak * (1 - trail_pct)
             state.current_price = current
             state.score = sell_sig.score
-            state.context = {**(state.context or {}), "exit_score": sell_sig.score, "exit_reason": sell_sig.reason}
+            state.context = ctx
             if price_hit == "invalidated":
                 state.state = "invalidated"
                 event = await self._create_event(db, state, position, stock, "invalidated", "价格跌破止损位")
                 return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
-            if price_hit == "sell_t" or (score_exit and sell_sig.action == "sell_open"):
+            do_close = trail_hit if trail_mode else (price_hit == "sell_t" or (score_exit and sell_sig.action == "sell_open"))
+            if do_close:
                 state.state = "sell_t_notified"
-                reason = "价格回归 VWAP/目标位" if price_hit == "sell_t" else f"高抛质量达标(分{sell_sig.score}):{sell_sig.reason}"
+                if trail_mode:
+                    reason = f"跟踪止盈:自高点 {ctx.get('extreme_price')} 回落 {trail_pct:.1%}"
+                elif price_hit == "sell_t":
+                    reason = "价格回归 VWAP/目标位"
+                else:
+                    reason = f"高抛质量达标(分{sell_sig.score}):{sell_sig.reason}"
                 event = await self._create_event(db, state, position, stock, "sell_t", reason)
                 return {"position_id": position.id, "status": "sell_t", "event_id": event.id}
             return {"position_id": position.id, "status": "waiting_exit", "score": sell_sig.score}
@@ -198,16 +219,33 @@ class TMonitorEngine:
                 stop_loss_price=float(state.stop_loss_price or current),
             )
             buy_sig = compute_base_position_vwap_t(daily, minute, **thresholds)
+            entry = float(state.entry_price or current)
+            ctx = {**(state.context or {}), "buyback_score": buy_sig.score, "buyback_reason": buy_sig.reason}
+            # 跟踪止盈:进入盈利区后记录最低价,自低点反弹 trail_pct 才买回
+            trail_hit = False
+            if trail_mode:
+                in_profit = current <= entry * (1 - min_profit)
+                trough = float(ctx.get("extreme_price") or current)
+                if in_profit:
+                    trough = min(trough, current)
+                    ctx["extreme_price"] = trough
+                    trail_hit = current >= trough * (1 + trail_pct)
             state.current_price = current
             state.score = buy_sig.score
-            state.context = {**(state.context or {}), "buyback_score": buy_sig.score, "buyback_reason": buy_sig.reason}
+            state.context = ctx
             if price_hit == "invalidated":
                 state.state = "invalidated"
                 event = await self._create_event(db, state, position, stock, "invalidated", "价格突破止损位")
                 return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
-            if price_hit == "buy_back" or (score_exit and buy_sig.action == "buy_t"):
+            do_close = trail_hit if trail_mode else (price_hit == "buy_back" or (score_exit and buy_sig.action == "buy_t"))
+            if do_close:
                 state.state = "buy_back_notified"
-                reason = "价格回落 VWAP/目标位" if price_hit == "buy_back" else f"低吸质量达标(分{buy_sig.score}):{buy_sig.reason}"
+                if trail_mode:
+                    reason = f"跟踪止盈:自低点 {ctx.get('extreme_price')} 反弹 {trail_pct:.1%}"
+                elif price_hit == "buy_back":
+                    reason = "价格回落 VWAP/目标位"
+                else:
+                    reason = f"低吸质量达标(分{buy_sig.score}):{buy_sig.reason}"
                 event = await self._create_event(db, state, position, stock, "buy_back", reason)
                 return {"position_id": position.id, "status": "buy_back", "event_id": event.id}
             return {"position_id": position.id, "status": "waiting_buyback", "score": buy_sig.score}
@@ -460,6 +498,7 @@ class TMonitorEngine:
                 state.stop_loss_price = stop
                 state.recommended_quantity = quantity
                 state.signal_expires_at = None
+                ctx.pop("extreme_price", None)  # 新开一轮,清掉上一轮的跟踪极值
                 ctx.update(direction=side, leg_entry_price=price, leg_qty=quantity, manual=True)
                 state.context = ctx
                 db.commit()

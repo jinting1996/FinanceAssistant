@@ -85,7 +85,8 @@ DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
             "position_ratio": 0.2,
             "max_cycles_per_day": 5,  # 当日最多做T轮数,0=不限
             "cycle_cooldown_minutes": 3,  # 两轮之间冷却分钟,0=不冷却
-            "exit_mode": "price",  # price=仅固定价触发 / price_or_score=价格或评分任一触发
+            "exit_mode": "price",  # price=固定价 / price_or_score=价格或评分任一 / trail=跟踪止盈
+            "trail_pct": 0.003,  # trail 模式:自极值回撤/反弹多少触发离场
             "signal_ttl_minutes": 10,
             "min_vwap_deviation_pct": 0.003,
             "min_profit_pct": 0.008,
