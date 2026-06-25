@@ -8,6 +8,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 from sqlalchemy.orm import Session
 
@@ -52,11 +55,12 @@ def _is_trading_time(market: MarketCode) -> bool:
 
 
 def _day_key(now: datetime) -> str:
-    return now.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    # 按北京时间分日:每日触发计数应在北京零点重置,而非 UTC(原为 UTC,边界差 8 小时)。
+    return now.astimezone(_SHANGHAI).strftime("%Y-%m-%d")
 
 
 def _minute_bucket(now: datetime) -> str:
-    return now.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+    return now.astimezone(_SHANGHAI).strftime("%Y%m%d%H%M")
 
 
 def _json_get(obj: dict, key: str, default=None):
