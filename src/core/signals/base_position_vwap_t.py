@@ -42,6 +42,17 @@ def _latest_day_minutes(rows: list[Any]) -> list[Any]:
     return [row for row in rows if str(_value(row, "date") or "")[:10] == last_day]
 
 
+def _exclude_today(daily_rows: list[Any], today: str) -> list[Any]:
+    """剔除今日未收盘的日K。盘中日K的高/低/收仍在变动,若计入会让早盘 ATR
+    被压低、昨日高低点取成今日盘中值——ATR/支撑压力须基于已收盘的完整日K,
+    今日实时价由分钟数据的 current 代表。"""
+    if not daily_rows or not today:
+        return daily_rows
+    if str(_value(daily_rows[-1], "date") or "")[:10] == today:
+        return daily_rows[:-1]
+    return daily_rows
+
+
 def compute_intraday_vwap(rows: list[Any]) -> tuple[float | None, str]:
     """优先使用成交额，字段缺失或单位异常时回退到典型价成交量加权。"""
     total_volume = 0.0
@@ -110,10 +121,13 @@ def compute_base_position_vwap_t(
     if len(daily_klines) < 25 or len(minute_klines) < 3:
         return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
 
-    daily = daily_klines[-80:]
     minute = _latest_day_minutes(minute_klines)[-320:]
     if len(minute) < 3:
         return TSignalResult(False, "observe", 0, "今日分钟数据不足", [], ["今日分钟数据不足"], None, None, None, None, None, "missing", {})
+    today = str(_value(minute[-1], "date") or "")[:10]
+    daily = _exclude_today(daily_klines, today)[-80:]
+    if len(daily) < 25:
+        return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
     closes = [_float(_value(row, "close")) for row in daily]
     lows = [_float(_value(row, "low")) for row in daily]
     if any(value is None for value in closes[-25:] + lows[-20:]):
@@ -224,10 +238,15 @@ def evaluate_t_exit(
     target_price: float,
     stop_loss_price: float,
 ) -> str:
-    """正T(先买后卖)离场:返回 sell_t / invalidated / observe。"""
+    """正T(先买后卖)离场:返回 sell_t / invalidated / observe。
+
+    target_price 已在入场时取 max(vwap, 入场价×(1+eff_profit)),既保证至少回到
+    VWAP 才止盈,又让 ATR 自适应目标真正驱动离场——故此处直接用 target_price,
+    不再套 min(vwap, target)(那会把放宽的目标吞回 VWAP)。vwap 仅保留兼容签名。
+    """
     if current_price <= stop_loss_price:
         return "invalidated"
-    if current_price >= min(vwap, target_price):
+    if current_price >= target_price:
         return "sell_t"
     return "observe"
 
@@ -247,10 +266,13 @@ def compute_base_position_vwap_t_short(
     if len(daily_klines) < 25 or len(minute_klines) < 3:
         return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
 
-    daily = daily_klines[-80:]
     minute = _latest_day_minutes(minute_klines)[-320:]
     if len(minute) < 3:
         return TSignalResult(False, "observe", 0, "今日分钟数据不足", [], ["今日分钟数据不足"], None, None, None, None, None, "missing", {})
+    today = str(_value(minute[-1], "date") or "")[:10]
+    daily = _exclude_today(daily_klines, today)[-80:]
+    if len(daily) < 25:
+        return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
     closes = [_float(_value(row, "close")) for row in daily]
     highs = [_float(_value(row, "high")) for row in daily]
     if any(value is None for value in closes[-25:] + highs[-20:]):
@@ -360,9 +382,14 @@ def evaluate_t_exit_short(
     target_price: float,
     stop_loss_price: float,
 ) -> str:
-    """倒T(先卖后买)离场:返回 buy_back / invalidated / observe。"""
+    """倒T(先卖后买)离场:返回 buy_back / invalidated / observe。
+
+    target_price 已在入场时取 min(vwap, 入场价×(1-eff_profit)),既保证至少回落到
+    VWAP 才买回,又让 ATR 自适应目标真正驱动离场——故此处直接用 target_price,
+    不再套 max(vwap, target)(那会把放宽的目标吞回 VWAP)。vwap 仅保留兼容签名。
+    """
     if current_price >= stop_loss_price:
         return "invalidated"
-    if current_price <= max(vwap, target_price):
+    if current_price <= target_price:
         return "buy_back"
     return "observe"

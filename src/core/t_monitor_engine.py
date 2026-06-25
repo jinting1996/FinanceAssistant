@@ -13,6 +13,7 @@ from src.core.kline_service import fetch_klines_sync
 from src.core.notifier import NotifierManager
 from src.core.signals.base_position_vwap_t import (
     _atr,
+    _exclude_today,
     compute_base_position_vwap_t,
     compute_base_position_vwap_t_short,
     evaluate_t_exit,
@@ -207,7 +208,7 @@ class TMonitorEngine:
                 if trail_mode:
                     reason = f"跟踪止盈:自高点 {ctx.get('extreme_price')} 回落 {trail_pct:.1%}"
                 elif price_hit == "sell_t":
-                    reason = "价格回归 VWAP/目标位"
+                    reason = "价格到达止盈目标位(含ATR自适应)"
                 else:
                     reason = f"高抛质量达标(分{sell_sig.score}):{sell_sig.reason}"
                 event = await self._create_event(db, state, position, stock, "sell_t", reason)
@@ -248,7 +249,7 @@ class TMonitorEngine:
                 if trail_mode:
                     reason = f"跟踪止盈:自低点 {ctx.get('extreme_price')} 反弹 {trail_pct:.1%}"
                 elif price_hit == "buy_back":
-                    reason = "价格回落 VWAP/目标位"
+                    reason = "价格回落到买回目标位(含ATR自适应)"
                 else:
                     reason = f"低吸质量达标(分{buy_sig.score}):{buy_sig.reason}"
                 event = await self._create_event(db, state, position, stock, "buy_back", reason)
@@ -499,7 +500,7 @@ class TMonitorEngine:
                         daily = await asyncio.to_thread(
                             fetch_klines_sync, stock.symbol, "CN", days=120, interval="1d", cache_ttl_sec=60
                         )
-                        atr = _atr(daily, 14)
+                        atr = _atr(_exclude_today(daily, _now().strftime("%Y-%m-%d")), 14)
                         if atr and price > 0:
                             ratio = atr / price
                             eff_profit = max(min_profit, profit_atr_mult * ratio)

@@ -82,6 +82,21 @@ def test_only_latest_trading_day_minutes_used():
     assert res_mixed.score == res_today.score
 
 
+def test_today_incomplete_daily_bar_excluded_from_atr():
+    """日K最后一根若是今日(未收盘)应从 ATR/支撑计算中剔除,避免早盘 ATR 被压低或放大。"""
+    from src.core.signals.base_position_vwap_t import _exclude_today
+
+    daily = _daily_rows()
+    daily[-1]["date"] = "2026-06-22"  # 与分钟数据同一天 = 今日
+    daily[-1]["high"] = daily[-1]["close"] + 5.0  # 异常大的盘中振幅
+    daily[-1]["low"] = daily[-1]["close"] - 5.0
+
+    assert len(_exclude_today(daily, "2026-06-22")) == len(daily) - 1
+    res_with = compute_base_position_vwap_t(daily, _minute_rows())
+    res_without = compute_base_position_vwap_t(daily[:-1], _minute_rows())
+    assert res_with.metrics["atr14"] == res_without.metrics["atr14"]
+
+
 def test_compute_base_position_vwap_t_produces_executable_levels():
     result = compute_base_position_vwap_t(_daily_rows(), _minute_rows())
 
@@ -106,8 +121,10 @@ def test_compute_base_position_vwap_t_blocks_broken_trend():
 
 
 def test_evaluate_t_exit_state():
+    """正T离场须到达目标位(含ATR自适应),仅回到VWAP不再触发止盈。"""
     params = {"vwap": 10.0, "target_price": 10.1, "stop_loss_price": 9.5}
-    assert evaluate_t_exit(10.0, **params) == "sell_t"
+    assert evaluate_t_exit(10.1, **params) == "sell_t"
+    assert evaluate_t_exit(10.0, **params) == "observe"  # 到VWAP但未达目标位 → 继续持有
     assert evaluate_t_exit(9.4, **params) == "invalidated"
     assert evaluate_t_exit(9.8, **params) == "observe"
 
@@ -185,7 +202,9 @@ def test_atr_adaptive_widens_targets_on_high_amplitude():
 
 
 def test_evaluate_t_exit_short_state():
+    """倒T买回须回落到目标位(含ATR自适应),仅回到VWAP不再触发买回。"""
     params = {"vwap": 10.0, "target_price": 9.9, "stop_loss_price": 10.5}
     assert evaluate_t_exit_short(9.9, **params) == "buy_back"
+    assert evaluate_t_exit_short(10.0, **params) == "observe"  # 到VWAP但未达目标位 → 继续持有
     assert evaluate_t_exit_short(10.6, **params) == "invalidated"
     assert evaluate_t_exit_short(10.2, **params) == "observe"
