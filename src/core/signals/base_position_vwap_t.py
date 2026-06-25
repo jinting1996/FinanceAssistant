@@ -31,6 +31,17 @@ def _atr(rows: list[Any], period: int = 14) -> float | None:
     return sum(values[-period:]) / period if len(values) >= period else None
 
 
+def _latest_day_minutes(rows: list[Any]) -> list[Any]:
+    """只取最新交易日当天的分钟K。分钟接口约返回 1.3 天数据,跨日会污染
+    VWAP(应每日开盘归零)和分钟反转确认(早盘会跨隔夜)。"""
+    if not rows:
+        return rows
+    last_day = str(_value(rows[-1], "date") or "")[:10]
+    if not last_day:
+        return rows
+    return [row for row in rows if str(_value(row, "date") or "")[:10] == last_day]
+
+
 def compute_intraday_vwap(rows: list[Any]) -> tuple[float | None, str]:
     """优先使用成交额，字段缺失或单位异常时回退到典型价成交量加权。"""
     total_volume = 0.0
@@ -100,7 +111,9 @@ def compute_base_position_vwap_t(
         return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
 
     daily = daily_klines[-80:]
-    minute = minute_klines[-320:]
+    minute = _latest_day_minutes(minute_klines)[-320:]
+    if len(minute) < 3:
+        return TSignalResult(False, "observe", 0, "今日分钟数据不足", [], ["今日分钟数据不足"], None, None, None, None, None, "missing", {})
     closes = [_float(_value(row, "close")) for row in daily]
     lows = [_float(_value(row, "low")) for row in daily]
     if any(value is None for value in closes[-25:] + lows[-20:]):
@@ -235,7 +248,9 @@ def compute_base_position_vwap_t_short(
         return TSignalResult(False, "observe", 0, "K线数据不足", [], ["K线数据不足"], None, None, None, None, None, "missing", {})
 
     daily = daily_klines[-80:]
-    minute = minute_klines[-320:]
+    minute = _latest_day_minutes(minute_klines)[-320:]
+    if len(minute) < 3:
+        return TSignalResult(False, "observe", 0, "今日分钟数据不足", [], ["今日分钟数据不足"], None, None, None, None, None, "missing", {})
     closes = [_float(_value(row, "close")) for row in daily]
     highs = [_float(_value(row, "high")) for row in daily]
     if any(value is None for value in closes[-25:] + highs[-20:]):

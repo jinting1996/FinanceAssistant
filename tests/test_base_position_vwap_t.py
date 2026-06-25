@@ -61,6 +61,27 @@ def test_compute_intraday_vwap_uses_amount_and_estimated_fallback():
     assert estimated_quality == "estimated"
 
 
+def test_only_latest_trading_day_minutes_used():
+    """混入昨日分钟K不应污染 VWAP/信号(应只看最新交易日)。"""
+    from src.core.signals.base_position_vwap_t import _latest_day_minutes
+
+    yesterday = [
+        KlineData(
+            date=f"2026-06-21 14:{minute:02d}",
+            open=20.0, high=20.1, low=19.9, close=20.0, volume=1000.0, amount=None, source="t",
+        )
+        for minute in range(40, 60)
+    ]
+    today = _minute_rows()
+    mixed = yesterday + today
+
+    assert len(_latest_day_minutes(mixed)) == len(today)
+    res_mixed = compute_base_position_vwap_t(_daily_rows(), mixed)
+    res_today = compute_base_position_vwap_t(_daily_rows(), today)
+    assert res_mixed.vwap == res_today.vwap
+    assert res_mixed.score == res_today.score
+
+
 def test_compute_base_position_vwap_t_produces_executable_levels():
     result = compute_base_position_vwap_t(_daily_rows(), _minute_rows())
 
