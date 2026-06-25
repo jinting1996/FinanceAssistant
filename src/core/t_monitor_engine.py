@@ -280,7 +280,7 @@ class TMonitorEngine:
 
         # --- idle:按方向计算多/空入场信号,谁满足谁触发(同分优先正T) ---
         direction = str(params.get("direction", "both") or "both").lower()
-        position_ratio = min(max(float(params.get("position_ratio", self.position_ratio)), 0.0), 0.3)
+        position_ratio = min(max(float(params.get("position_ratio", self.position_ratio)), 0.0), 1.0)
         sellable = max(int(position.sellable_quantity if position.sellable_quantity is not None else position.quantity), 0)
 
         candidates: list[tuple[str, str, Any, int]] = []  # (side, action, signal, recommended)
