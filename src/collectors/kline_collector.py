@@ -31,7 +31,7 @@ _EASTMONEY_INTRADAY_CACHE = TTLCache(
     default_ttl_sec=_EASTMONEY_INTRADAY_CACHE_TTL_SECONDS,
     max_size=2048,
 )
-_TENCENT_INTRADAY_CACHE = TTLCache(default_ttl_sec=10, max_size=2048)
+_TENCENT_INTRADAY_CACHE = TTLCache(default_ttl_sec=5, max_size=2048)
 
 
 def _fetch_stooq_us_klines(symbol: str) -> list[KlineData]:
