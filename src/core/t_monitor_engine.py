@@ -160,6 +160,10 @@ class TMonitorEngine:
             db.flush()
 
         current = float(getattr(minute[-1], "close", 0) if not isinstance(minute[-1], dict) else minute[-1].get("close", 0))
+        # 先无条件刷新现价:下方多个状态分支会提前 return(到达次数上限/已触发信号待确认/
+        # 失效/完成冷却中),若不在此统一更新,这些持仓的现价会一直冻结在上次入场时的价。
+        if current > 0:
+            state.current_price = current
         thresholds = dict(
             min_score=int(params.get("min_score", 70)),
             min_vwap_deviation_pct=float(params.get("min_vwap_deviation_pct", 0.003)),
