@@ -21,7 +21,7 @@ from src.core.signals.base_position_vwap_t import (
 )
 
 # 倒T(先卖后买)相关的动作与状态
-_SHORT_ACTIONS = {"sell_open", "buy_back"}
+_SHORT_ACTIONS = {"sell_open", "buy_back", "buy_back_stop"}
 from src.core.strategy_catalog import get_strategy_profile_map
 from src.models.market import MARKETS, MarketCode
 from src.web.database import SessionLocal
@@ -68,6 +68,8 @@ class TMonitorEngine:
             "sell_t": "做T卖出提醒(止盈)",
             "sell_open": "做T机会(高抛/倒T)",
             "buy_back": "做T买回提醒(倒T)",
+            "sell_t_stop": "做T卖出提醒(止损)",
+            "buy_back_stop": "做T买回提醒(止损)",
             "invalidated": "做T信号失效",
         }.get(event.action, "做T提醒")
         is_short = event.action in _SHORT_ACTIONS
@@ -200,7 +202,7 @@ class TMonitorEngine:
             state.context = ctx
             if price_hit == "invalidated":
                 state.state = "invalidated"
-                event = await self._create_event(db, state, position, stock, "invalidated", "价格跌破止损位")
+                event = await self._create_event(db, state, position, stock, "sell_t_stop", "触及止损位,止损卖出(认亏离场)")
                 return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
             do_close = trail_hit if trail_mode else (price_hit == "sell_t" or (score_exit and sell_sig.action == "sell_open"))
             if do_close:
@@ -241,7 +243,7 @@ class TMonitorEngine:
             state.context = ctx
             if price_hit == "invalidated":
                 state.state = "invalidated"
-                event = await self._create_event(db, state, position, stock, "invalidated", "价格突破止损位")
+                event = await self._create_event(db, state, position, stock, "buy_back_stop", "触及止损位,止损买回(认亏离场)")
                 return {"position_id": position.id, "status": "invalidated", "event_id": event.id}
             do_close = trail_hit if trail_mode else (price_hit == "buy_back" or (score_exit and buy_sig.action == "buy_t"))
             if do_close:
