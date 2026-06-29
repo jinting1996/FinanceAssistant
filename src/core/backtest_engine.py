@@ -355,7 +355,7 @@ def _screener_formula_signals(db: Session, strategies: dict[str, StrategyCatalog
             if len(klines) < 2:
                 continue
             try:
-                result = FormulaEvaluator(klines).run(program)
+                result = FormulaEvaluator(klines, symbol=stock.symbol).run(program)
             except Exception as e:
                 logger.debug("formula backtest failed for %s %s: %s", strategy.code, stock.symbol, e)
                 continue

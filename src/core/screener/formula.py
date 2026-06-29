@@ -41,10 +41,12 @@ SUPPORTED_FUNCTIONS = {
     "EVERY",
     "EXIST",
     "BARSLAST",
+    "HHVBARS",
     "ABS",
     "MAX",
     "MIN",
     "SQRT",
+    "CODELIKE",
 }
 
 
@@ -69,7 +71,8 @@ class FormulaProgram:
 
 _TOKEN_RE = re.compile(
     r"""
-    (?P<number>\d+(?:\.\d+)?|\.\d+)
+    (?P<string>'[^']*'|"[^"]*")
+    |(?P<number>\d+(?:\.\d+)?|\.\d+)
     |(?P<ident>[A-Za-z_][A-Za-z0-9_]*)
     |(?P<op>>=|<=|!=|<>|:=|[+\-*/(),;:><=])
     |(?P<bad>.)
@@ -109,7 +112,9 @@ def tokenize(text: str) -> list[Token]:
         value = match.group(kind)
         if kind == "bad":
             raise FormulaError(f"不支持的公式字符: {value}")
-        if kind == "ident":
+        if kind == "string":
+            tokens.append(Token("string", value[1:-1]))
+        elif kind == "ident":
             upper = value.upper()
             if upper in {"AND", "OR", "NOT"}:
                 tokens.append(Token("op", upper))
@@ -239,6 +244,8 @@ class Parser:
         token = self._consume()
         if token.kind == "number":
             return Node("number", float(token.value))
+        if token.kind == "string":
+            return Node("string", token.value)
         if token.kind == "ident":
             name = token.value
             if self._accept("("):
@@ -481,10 +488,40 @@ def _barslast(cond: list[bool]) -> list[float | None]:
     return out
 
 
+def _hhvbars(values: list[float | None], period: int) -> list[float | None]:
+    """通达信 HHVBARS(X,N):N 周期内最高值到当前的周期数;就近取最近的最高点。"""
+    p = max(1, int(period))
+    out: list[float | None] = []
+    for i in range(len(values)):
+        start = max(0, i - p + 1)
+        window = [v for v in values[start: i + 1] if v is not None]
+        if not window:
+            out.append(None)
+            continue
+        mx = max(window)
+        dist: int | None = None
+        for j in range(i, start - 1, -1):
+            if values[j] is not None and values[j] == mx:
+                dist = i - j
+                break
+        out.append(float(dist) if dist is not None else None)
+    return out
+
+
+def _normalize_code(symbol: str) -> str:
+    """去掉交易所字母前缀(如 SZ300750 → 300750、sh.600519 → 600519),保留代码主体。"""
+    code = str(symbol or "").strip().upper()
+    i = 0
+    while i < len(code) and not code[i].isdigit():
+        i += 1
+    return code[i:]
+
+
 class FormulaEvaluator:
-    def __init__(self, klines: list[Any]):
+    def __init__(self, klines: list[Any], symbol: str = ""):
         self.klines = sorted(klines, key=lambda k: getattr(k, "date", ""))
         self.length = len(self.klines)
+        self.code = _normalize_code(symbol)
         self.env: dict[str, Any] = {
             "OPEN": [float(getattr(k, "open", 0) or 0) for k in self.klines],
             "HIGH": [float(getattr(k, "high", 0) or 0) for k in self.klines],
@@ -545,6 +582,8 @@ class FormulaEvaluator:
 
     def eval(self, node: Node) -> Any:
         if node.kind == "number":
+            return node.value
+        if node.kind == "string":
             return node.value
         if node.kind == "ident":
             name = str(node.value).upper()
@@ -612,11 +651,24 @@ class FormulaEvaluator:
                 raise FormulaError(f"不支持的运算符: {op}")
         return out
 
+    def _period(self, arg: Any) -> int | None:
+        """解析周期参数;当周期为空(如 BARSLAST 从未成立 → None)时返回 None，
+        交由调用方优雅降级为空序列，而不是抛 TypeError。"""
+        raw = _series(arg, self.length)[-1]
+        if raw is None:
+            return None
+        try:
+            return int(float(raw))
+        except Exception:
+            return None
+
     def _call(self, name: str, args: list[Any]) -> Any:
         if name in {"MA", "EMA", "REF", "HHV", "LLV"}:
             if len(args) != 2:
                 raise FormulaError(f"{name} 需要 2 个参数")
-            period = int(float(_series(args[1], self.length)[-1]))
+            period = self._period(args[1])
+            if period is None:
+                return [None] * self.length
             vals = _num_series(args[0], self.length)
             if name == "MA":
                 return _rolling(vals, period, "ma")
@@ -671,8 +723,10 @@ class FormulaEvaluator:
         if name in {"SUM", "STD", "AVEDEV"}:
             if len(args) != 2:
                 raise FormulaError(f"{name} 需要 2 个参数")
+            period = self._period(args[1])
+            if period is None:
+                return [None] * self.length
             vals = _num_series(args[0], self.length)
-            period = int(float(_series(args[1], self.length)[-1]))
             if name == "SUM":
                 return _sum(vals, period)
             if name == "STD":
@@ -682,6 +736,22 @@ class FormulaEvaluator:
             if len(args) != 1:
                 raise FormulaError("BARSLAST 需要 1 个参数")
             return _barslast(_bool_series(args[0], self.length))
+        if name == "HHVBARS":
+            if len(args) != 2:
+                raise FormulaError("HHVBARS 需要 2 个参数")
+            period = self._period(args[1])
+            if period is None:
+                return [None] * self.length
+            vals = _num_series(args[0], self.length)
+            return _hhvbars(vals, period)
+        if name == "CODELIKE":
+            if len(args) != 1:
+                raise FormulaError("CODELIKE 需要 1 个参数")
+            prefix = args[0]
+            if not isinstance(prefix, str):
+                raise FormulaError("CODELIKE 需要字符串参数，例如 CODELIKE('300')")
+            matched = self.code.startswith(prefix.strip().upper())
+            return [matched for _ in range(self.length)]
         if name == "SQRT":
             if len(args) != 1:
                 raise FormulaError("SQRT 需要 1 个参数")
@@ -689,8 +759,11 @@ class FormulaEvaluator:
         if name in {"COUNT", "EVERY", "EXIST"}:
             if len(args) != 2:
                 raise FormulaError(f"{name} 需要 2 个参数")
+            resolved = self._period(args[1])
+            if resolved is None:
+                return [0 if name == "COUNT" else False for _ in range(self.length)]
             cond = _bool_series(args[0], self.length)
-            period = max(1, int(float(_series(args[1], self.length)[-1])))
+            period = max(1, resolved)
             out: list[Any] = []
             for i in range(self.length):
                 window = cond[max(0, i - period + 1): i + 1]
@@ -722,8 +795,8 @@ class FormulaEvaluator:
         raise FormulaError(f"不支持的函数: {name}")
 
 
-def evaluate_formula(text: str, klines: list[Any]) -> dict[str, Any]:
-    return FormulaEvaluator(klines).run(parse_formula(text))
+def evaluate_formula(text: str, klines: list[Any], symbol: str = "") -> dict[str, Any]:
+    return FormulaEvaluator(klines, symbol=symbol).run(parse_formula(text))
 
 
 def function_catalog() -> dict[str, Any]:
@@ -750,6 +823,8 @@ def function_catalog() -> dict[str, Any]:
             {"name": "COUNT(COND,N)", "description": "N日内条件成立次数"},
             {"name": "EVERY(COND,N) / EXIST(COND,N)", "description": "N日内每天/曾经成立"},
             {"name": "BARSLAST(COND)", "description": "距上次条件成立的周期数"},
+            {"name": "HHVBARS(X,N)", "description": "N日内最高值到当前的周期数"},
+            {"name": "CODELIKE('300')", "description": "股票代码以指定前缀开头(板块过滤)"},
             {"name": "ABS / MAX / MIN / SQRT", "description": "基础数值函数"},
         ],
         "examples": [

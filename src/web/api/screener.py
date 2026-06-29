@@ -155,7 +155,7 @@ def _run_screener_job(run_id: int, task: TaskHandle | None = None) -> dict:
             evaluated: dict[str, Any] = {"matched": False}
             if len(klines) >= 30:
                 try:
-                    evaluated = FormulaEvaluator(klines).run(program)
+                    evaluated = FormulaEvaluator(klines, symbol=stock.symbol).run(program)
                 except FormulaError as e:
                     logger.debug("formula not evaluable for %s: %s", stock.symbol, e)
                 except Exception as e:
