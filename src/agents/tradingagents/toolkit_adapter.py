@@ -156,6 +156,17 @@ _ROUTE_TO_VENDOR_IMPORT_SITES = (
 )
 
 
+# 市场分析师的 get_verified_market_snapshot 工具(数据校验快照)**不走 route_to_vendor**,
+# 而是直接 `from ...stockstats_utils import load_ohlcv` 拉 yfinance。A 股/港股 yfinance
+# 没数据 → load_ohlcv 抛 NoMarketDataError → 整个深度分析失败。
+# 所以这里同样 patch load_ohlcv:routable 标的直接用 PanWatch 已拉好的 K线构造 DataFrame,
+# 不碰 yfinance。import-time binding 同 route_to_vendor,需 patch 所有 import site。
+_LOAD_OHLCV_IMPORT_SITES = (
+    "tradingagents.dataflows.stockstats_utils",
+    "tradingagents.dataflows.market_data_validator",
+)
+
+
 # patch 引用计数:多个并发深度分析共享同一次安装,第一个进入者保存真
 # route_to_vendor 并装到所有 import site,最后一个退出才恢复。数据隔离靠
 # _PANWATCH_DATA(ContextVar),patch 本身只需进程级安装一次 —— 消除原先
@@ -164,6 +175,7 @@ _patch_lock = threading.Lock()
 _patch_refcount = 0
 _patch_saved_sites: list[tuple[Any, str, Any]] = []  # (module, attr_name, original_value)
 _real_route_to_vendor = None  # 真 route_to_vendor(走上游 vendor 时用)
+_real_load_ohlcv = None  # 真 load_ohlcv(美股等非 routable 标的走上游 yfinance 时用)
 
 
 def _patched_route_to_vendor(method_name: str, *args, **kwargs):
@@ -313,7 +325,7 @@ def patch_route_to_vendor():
 
     如果 tradingagents 库未安装,本 context manager 是 no-op,不抛异常。
     """
-    global _patch_refcount, _real_route_to_vendor
+    global _patch_refcount, _real_route_to_vendor, _real_load_ohlcv
 
     try:
         from tradingagents.dataflows import interface as ta_interface
@@ -349,6 +361,24 @@ def patch_route_to_vendor():
                     _patch_saved_sites.append((mod, "route_to_vendor", mod.route_to_vendor))
                     mod.route_to_vendor = _patched_route_to_vendor
                     logger.debug(f"[TA toolkit] patched route_to_vendor in {module_path}")
+
+            # 同时 patch load_ohlcv —— get_verified_market_snapshot 工具绕过 route_to_vendor
+            # 直接调它拉 yfinance,A 股/港股会抛 NoMarketDataError 拖垮整个分析。
+            try:
+                from tradingagents.dataflows import stockstats_utils as ta_stockstats
+                _real_load_ohlcv = ta_stockstats.load_ohlcv
+            except ImportError:
+                _real_load_ohlcv = None
+            if _real_load_ohlcv is not None:
+                for module_path in _LOAD_OHLCV_IMPORT_SITES:
+                    try:
+                        mod = importlib.import_module(module_path)
+                    except ImportError:
+                        continue
+                    if hasattr(mod, "load_ohlcv"):
+                        _patch_saved_sites.append((mod, "load_ohlcv", mod.load_ohlcv))
+                        mod.load_ohlcv = _patched_load_ohlcv
+                        logger.debug(f"[TA toolkit] patched load_ohlcv in {module_path}")
         _patch_refcount += 1
 
     try:
@@ -653,6 +683,74 @@ def _quote_to_lightweight_fundamentals(symbol: str) -> str:
         "via turnover) rather than as the basis for revenue/earnings claims."
     )
     return "\n".join(lines)
+
+
+def _klines_to_dataframe(klines):
+    """KlineData list → pandas.DataFrame,列与上游 load_ohlcv 输出一致。
+
+    上游 stockstats_utils.load_ohlcv 返回 Date/Open/High/Low/Close/Volume(首字母大写),
+    数值列已 to_numeric、按日期升序。这里照搬以便 _verified_rows / stockstats.wrap 直接消费。
+    """
+    import pandas as pd
+
+    rows = []
+    for k in klines:
+        date_v = getattr(k, "date", None) or (k.get("date") if isinstance(k, dict) else None)
+        rows.append(
+            {
+                "Date": date_v,
+                "Open": _attr(k, "open", None),
+                "High": _attr(k, "high", None),
+                "Low": _attr(k, "low", None),
+                "Close": _attr(k, "close", None),
+                "Volume": _attr(k, "volume", None),
+            }
+        )
+    df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+    if df.empty:
+        return df
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    for col in ("Open", "High", "Low", "Close", "Volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df
+
+
+def _patched_load_ohlcv(symbol: str, curr_date: str):
+    """A 股/港股直接用 PanWatch K线构造 DataFrame,其余放行到上游 yfinance load_ohlcv。
+
+    与上游 stockstats_utils.load_ohlcv(symbol, curr_date) 同签名。routable 标的(6 位 A 股 /
+    5 位港股)yfinance 拉不到,改用 _cache() 里 PanWatch 已拉好的 K线;为防回测前视偏差,
+    同上游一样按 curr_date 截断未来行。
+    """
+    if is_panwatch_routable(symbol) and _cache():
+        klines = _cache().get("klines") or []
+        if klines:
+            df = _klines_to_dataframe(klines)
+            if df is not None and not df.empty:
+                try:
+                    import pandas as pd
+
+                    df = df[df["Date"] <= pd.to_datetime(curr_date)]
+                except Exception:
+                    pass
+                _emit_toolkit_log(
+                    "info", "HIT", "load_ohlcv", symbol,
+                    rows=len(df), source="panwatch",
+                )
+                return df
+        # routable 但 PanWatch 也没 K线:抛上游同款异常,让分析师如实报告"数据不可用",
+        # 而不是去拉 yfinance(必然又是空 + 误导 LLM 用美股数据)
+        from tradingagents.dataflows.symbol_utils import NoMarketDataError
+
+        _emit_toolkit_log(
+            "warning", "ERROR", "load_ohlcv", symbol,
+            error="PanWatch 无 K线数据,不回退 yfinance",
+        )
+        raise NoMarketDataError(symbol, symbol, "PanWatch has no kline data")
+
+    # 美股 / 其他:走上游真 load_ohlcv(yfinance)
+    return _real_load_ohlcv(symbol, curr_date)
 
 
 def _klines_to_csv(klines) -> str:
