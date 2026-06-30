@@ -469,6 +469,66 @@ class StockScreenerResult(Base):
     run = relationship("StockScreenerRun", back_populates="results")
 
 
+class StrategyPrompt(Base):
+    """可配置的「策略提示词」。作为 AI 分析池内股票时的 system prompt。"""
+
+    __tablename__ = "strategy_prompts"
+    __table_args__ = (
+        Index("ix_strategy_prompt_enabled", "enabled", "updated_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    description = Column(String, default="")
+    prompt = Column(Text, nullable=False)
+    is_default = Column(Boolean, default=False)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class StrategyAnalysisPoolItem(Base):
+    """策略分析池：手动加入或从持仓导入的待分析股票。"""
+
+    __tablename__ = "strategy_analysis_pool"
+    __table_args__ = (
+        UniqueConstraint("market", "symbol", name="uq_strategy_pool_symbol"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    name = Column(String, default="")
+    source = Column(String, default="manual")  # manual / position
+    note = Column(String, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class StrategyAnalysisResult(Base):
+    """逐票策略 AI 分析结果（保留历史，按 symbol 取最新）。"""
+
+    __tablename__ = "strategy_analysis_results"
+    __table_args__ = (
+        Index("ix_strategy_result_symbol", "market", "symbol", "created_at"),
+        Index("ix_strategy_result_strategy", "strategy_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_id = Column(
+        Integer,
+        ForeignKey("strategy_prompts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    strategy_name = Column(String, default="")
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    name = Column(String, default="")
+    verdict = Column(String, default="")  # AI 抽取的一句话结论
+    content = Column(Text, default="")     # 完整分析正文（Markdown）
+    model = Column(String, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class NewsCache(Base):
     """新闻缓存（用于去重）"""
 

@@ -31,6 +31,7 @@ from src.web.api import (
     market_events,
     market_feed,
     screener,
+    strategy_analysis,
     system,
     tasks,
     backtests,
@@ -194,6 +195,12 @@ app.include_router(
     screener.router,
     prefix="/api/screener",
     tags=["screener"],
+    dependencies=protected,
+)
+app.include_router(
+    strategy_analysis.router,
+    prefix="/api/strategy-analysis",
+    tags=["strategy-analysis"],
     dependencies=protected,
 )
 app.include_router(

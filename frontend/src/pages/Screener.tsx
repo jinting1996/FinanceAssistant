@@ -16,6 +16,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import KlineModal from '@panwatch/biz-ui/components/KlineModal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
+import StrategyAnalysisPanel from '../components/StrategyAnalysisPanel'
 
 const DEFAULT_FORMULA = 'CROSS(MA(C,5), MA(C,20)) AND RSI(C,6) < 70'
 
@@ -606,6 +607,8 @@ export default function ScreenerPage() {
           </section>
         </div>
       </div>
+
+      <StrategyAnalysisPanel />
 
       <KlineModal
         open={!!klineTarget}
