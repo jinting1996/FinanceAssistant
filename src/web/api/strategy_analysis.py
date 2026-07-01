@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from src.web.api.chat import _get_ai_client
 from src.core.signals.structured_output import try_extract_tagged_json
 from src.web.database import get_db
 from src.web.models import (
+    AppSettings,
     ChatConversation,
     Position,
     Stock,
@@ -458,6 +460,35 @@ class OverviewIn(BaseModel):
     strategy_id: int
 
 
+def _overview_key(strategy_id: int) -> str:
+    return f"strategy_overview:{strategy_id}"
+
+
+def _load_overview(db: Session, strategy_id: int) -> dict | None:
+    row = (
+        db.query(AppSettings)
+        .filter(AppSettings.key == _overview_key(strategy_id))
+        .first()
+    )
+    if not row or not row.value:
+        return None
+    try:
+        return json.loads(row.value)
+    except Exception:
+        return None
+
+
+def _save_overview(db: Session, strategy_id: int, payload: dict) -> None:
+    key = _overview_key(strategy_id)
+    val = json.dumps(payload, ensure_ascii=False)
+    row = db.query(AppSettings).filter(AppSettings.key == key).first()
+    if row:
+        row.value = val
+    else:
+        db.add(AppSettings(key=key, value=val, description="策略池总览排序快照"))
+    db.commit()
+
+
 def _tags_brief(name: str, symbol: str, market: str, tags: dict) -> str:
     t = tags or {}
 
@@ -566,10 +597,21 @@ async def overview(payload: OverviewIn, db: Session = Depends(get_db)):
             }
         )
 
-    return {
+    result = {
         "summary": summary or content.strip()[:400],
         "ranked": ranked,
         "unanalyzed": unanalyzed,
         "model": getattr(ai_client, "model", ""),
         "analyzed_at": _iso(datetime.now(timezone.utc)),
     }
+    _save_overview(db, strategy.id, result)
+    return result
+
+
+@router.get("/overview")
+def get_overview(strategy_id: int, db: Session = Depends(get_db)):
+    """读取该策略最近一次的总览排序快照（不触发 AI）。"""
+    cached = _load_overview(db, strategy_id)
+    if cached is None:
+        return {"summary": "", "ranked": [], "unanalyzed": [], "model": "", "analyzed_at": ""}
+    return cached

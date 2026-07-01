@@ -355,21 +355,33 @@ export default function StrategyAnalysisPanel() {
     )
   }
 
-  // 池子总览：把各票已有结论汇总给 AI，排序
-  const runOverview = async () => {
+  // 打开总览弹窗：只读缓存快照，不触发 AI
+  const openOverview = async () => {
     if (!selectedId) {
       setMessage('请先选择一个策略')
       return
     }
     setOverviewOpen(true)
     setOverviewLoading(true)
-    setOverview(null)
+    try {
+      const res = await strategyAnalysisApi.getOverview(selectedId)
+      setOverview(res)
+    } catch {
+      setOverview(null)
+    } finally {
+      setOverviewLoading(false)
+    }
+  }
+
+  // 手动刷新：重新调用 AI 排序并落缓存
+  const refreshOverview = async () => {
+    if (!selectedId) return
+    setOverviewLoading(true)
     try {
       const res = await strategyAnalysisApi.overview(selectedId)
       setOverview(res)
     } catch (e: any) {
-      setMessage(e?.message || '总览分析失败')
-      setOverviewOpen(false)
+      setMessage(e?.message || '总览排序失败')
     } finally {
       setOverviewLoading(false)
     }
@@ -405,11 +417,11 @@ export default function StrategyAnalysisPanel() {
         <Button
           variant="secondary"
           className="shrink-0"
-          onClick={runOverview}
-          disabled={overviewLoading || !selectedId || pool.length === 0}
-          title="汇总池内各票结论，用 AI 排序"
+          onClick={openOverview}
+          disabled={!selectedId || pool.length === 0}
+          title="查看池内排序（点开是上次结果，弹窗里可手动刷新）"
         >
-          {overviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListOrdered className="h-4 w-4" />}
+          <ListOrdered className="h-4 w-4" />
           池子总览排序
         </Button>
       </div>
@@ -631,9 +643,22 @@ export default function StrategyAnalysisPanel() {
       <Dialog open={overviewOpen} onOpenChange={setOverviewOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ListOrdered className="h-4 w-4 text-primary" />
-              池子总览排序{selected ? ` · ${selected.name}` : ''}
+            <DialogTitle className="flex items-center justify-between gap-2 pr-8">
+              <span className="flex items-center gap-2">
+                <ListOrdered className="h-4 w-4 text-primary" />
+                池子总览排序{selected ? ` · ${selected.name}` : ''}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={refreshOverview}
+                disabled={overviewLoading}
+                title="重新调用 AI 排序"
+              >
+                {overviewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                刷新排序
+              </Button>
             </DialogTitle>
           </DialogHeader>
 
@@ -643,7 +668,16 @@ export default function StrategyAnalysisPanel() {
             </div>
           )}
 
-          {!overviewLoading && overview && (
+          {!overviewLoading && overview && overview.ranked.length === 0 && (
+            <div className="flex flex-col items-center gap-3 py-10 text-center text-[13px] text-muted-foreground">
+              <div>还没有排序结果。点「刷新排序」让 AI 汇总池内各票结论并排序。</div>
+              <Button onClick={refreshOverview} disabled={overviewLoading}>
+                <ListOrdered className="h-4 w-4" /> 开始排序
+              </Button>
+            </div>
+          )}
+
+          {!overviewLoading && overview && overview.ranked.length > 0 && (
             <div className="max-h-[70vh] space-y-3 overflow-auto">
               {overview.summary && (
                 <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-[12px] leading-relaxed text-foreground">
@@ -678,7 +712,8 @@ export default function StrategyAnalysisPanel() {
                 </div>
               )}
               <div className="text-[10px] text-muted-foreground">
-                {overview.model} · {overview.analyzed_at}
+                排序时间 {overview.analyzed_at || '—'}
+                {overview.model ? ` · ${overview.model}` : ''}（点右上「刷新排序」重算）
               </div>
             </div>
           )}

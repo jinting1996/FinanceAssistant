@@ -106,6 +106,10 @@ export const strategyAnalysisApi = {
     fetchAPI<{ items: Record<string, { conversation_id: number; updated_at: string; title: string }> }>(
       `/strategy-analysis/last-conversations?strategy_id=${strategyId}`,
     ),
+  // 读取缓存的排序快照（不触发 AI）
+  getOverview: (strategyId: number) =>
+    fetchAPI<StrategyOverview>(`/strategy-analysis/overview?strategy_id=${strategyId}`),
+  // 重新计算排序（触发 AI）并落缓存
   overview: (strategyId: number) =>
     fetchAPI<StrategyOverview>('/strategy-analysis/overview', {
       method: 'POST',
