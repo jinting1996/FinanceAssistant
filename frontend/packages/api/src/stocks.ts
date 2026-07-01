@@ -22,6 +22,12 @@ export interface StockCreatePayload {
   market: string
 }
 
+export interface StockSearchResult {
+  symbol: string
+  name: string
+  market: string
+}
+
 export interface StockAgentUpdatePayload {
   agents: Array<{
     agent_name: string
@@ -63,6 +69,10 @@ function withQuery(path: string, params: TriggerStockAgentOptions): string {
 
 export const stocksApi = {
   list: () => fetchAPI<StockItem[]>('/stocks'),
+  search: (q: string, market = '') =>
+    fetchAPI<StockSearchResult[]>(
+      `/stocks/search?q=${encodeURIComponent(q)}${market ? `&market=${encodeURIComponent(market)}` : ''}`,
+    ),
   create: (payload: StockCreatePayload) =>
     fetchAPI<StockItem>('/stocks', {
       method: 'POST',

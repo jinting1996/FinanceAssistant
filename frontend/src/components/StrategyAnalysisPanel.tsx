@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   ChevronDown,
@@ -7,13 +7,16 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Sparkles,
   Trash2,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
+  stocksApi,
   strategyAnalysisApi,
+  type StockSearchResult,
   type StrategyAnalysisResultItem,
   type StrategyPoolItem,
   type StrategyPromptItem,
@@ -22,6 +25,12 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 
 const MARKET_LABEL: Record<string, string> = { CN: 'A股', HK: '港股', US: '美股' }
+const MARKET_TABS = [
+  { value: '', label: '全部' },
+  { value: 'CN', label: 'A股' },
+  { value: 'HK', label: '港股' },
+  { value: 'US', label: '美股' },
+]
 
 export default function StrategyAnalysisPanel() {
   const [strategies, setStrategies] = useState<StrategyPromptItem[]>([])
@@ -34,8 +43,13 @@ export default function StrategyAnalysisPanel() {
   const [prompt, setPrompt] = useState('')
   const [editingPrompt, setEditingPrompt] = useState(false)
 
-  const [newSymbol, setNewSymbol] = useState('')
-  const [newMarket, setNewMarket] = useState('CN')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMarket, setSearchMarket] = useState('')
+  const [searchResults, setSearchResults] = useState<StockSearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [showDropdown, setShowDropdown] = useState(false)
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>()
+  const dropdownRef = useRef<HTMLDivElement>(null)
 
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -151,15 +165,48 @@ export default function StrategyAnalysisPanel() {
     }
   }
 
-  const addManual = async () => {
-    const symbol = newSymbol.trim()
-    if (!symbol) return
+  const doSearch = async (q: string, market: string) => {
+    if (q.trim().length < 1) {
+      setSearchResults([])
+      setShowDropdown(false)
+      return
+    }
+    setSearching(true)
+    try {
+      const results = await stocksApi.search(q.trim(), market)
+      setSearchResults(results || [])
+      setShowDropdown(true)
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value)
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => doSearch(value, searchMarket), 400)
+  }
+
+  const handleSearchMarketChange = (market: string) => {
+    setSearchMarket(market)
+    if (searchQuery) doSearch(searchQuery, market)
+  }
+
+  const selectStock = async (item: StockSearchResult) => {
+    setShowDropdown(false)
+    setSearchQuery('')
+    setSearchResults([])
     setAdding(true)
     setMessage('')
     try {
-      const res = await strategyAnalysisApi.addPoolItem({ symbol, market: newMarket })
-      setMessage(res.created ? `已加入 ${symbol}` : `${symbol} 已在池中`)
-      setNewSymbol('')
+      const res = await strategyAnalysisApi.addPoolItem({
+        symbol: item.symbol,
+        market: item.market,
+        name: item.name,
+      })
+      setMessage(res.created ? `已加入 ${item.name}（${item.symbol}）` : `${item.name} 已在池中`)
       const poolRes = await strategyAnalysisApi.listPool()
       setPool(poolRes.items || [])
     } catch (e: any) {
@@ -168,6 +215,16 @@ export default function StrategyAnalysisPanel() {
       setAdding(false)
     }
   }
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
 
   const removePoolItem = async (id: number) => {
     try {
@@ -332,26 +389,55 @@ export default function StrategyAnalysisPanel() {
                 导入持仓
               </Button>
             </div>
-            <div className="mb-2 flex items-center gap-2">
-              <select
-                value={newMarket}
-                onChange={(e) => setNewMarket(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-background px-2 text-[12px] outline-none"
-              >
-                <option value="CN">A股</option>
-                <option value="HK">港股</option>
-                <option value="US">美股</option>
-              </select>
-              <Input
-                value={newSymbol}
-                onChange={(e) => setNewSymbol(e.target.value)}
-                placeholder="代码，如 600519"
-                onKeyDown={(e) => e.key === 'Enter' && addManual()}
-                className="flex-1"
-              />
-              <Button size="sm" className="h-9" onClick={addManual} disabled={adding || !newSymbol.trim()}>
-                {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              </Button>
+            <div className="mb-2">
+              <div className="mb-1.5 flex items-center gap-1">
+                {MARKET_TABS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => handleSearchMarketChange(opt.value)}
+                    className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                      searchMarket === opt.value
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className="relative" ref={dropdownRef}>
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => handleSearchInput(e.target.value)}
+                  onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
+                  placeholder="代码或名称，如 600519 或 茅台"
+                  className="pl-9"
+                  autoComplete="off"
+                />
+                {(searching || adding) && (
+                  <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-primary" />
+                )}
+                {showDropdown && searchResults.length > 0 && (
+                  <div className="absolute z-50 mt-1 max-h-52 w-full overflow-auto rounded-lg border border-border bg-card shadow-lg">
+                    {searchResults.map((item) => (
+                      <button
+                        key={`${item.market}-${item.symbol}`}
+                        type="button"
+                        onClick={() => selectStock(item)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors hover:bg-accent/50"
+                      >
+                        <span className="rounded bg-accent/60 px-1 py-0.5 text-[9px] text-muted-foreground">
+                          {MARKET_LABEL[item.market] || item.market}
+                        </span>
+                        <span className="font-mono text-[12px] text-muted-foreground">{item.symbol}</span>
+                        <span className="flex-1 text-foreground">{item.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="space-y-1.5">
               {pool.map((p) => {
