@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.web.api.chat import _get_ai_client
+from src.core.signals.structured_output import try_extract_tagged_json
 from src.web.database import get_db
 from src.web.models import (
     ChatConversation,
@@ -448,3 +449,127 @@ def last_conversations(strategy_id: int, db: Session = Depends(get_db)):
                 "title": c.title or "",
             }
     return {"items": latest}
+
+
+# --------------------------------------------------------------------------- #
+# 池子总览：汇总各票结论并排序
+# --------------------------------------------------------------------------- #
+class OverviewIn(BaseModel):
+    strategy_id: int
+
+
+def _tags_brief(name: str, symbol: str, market: str, tags: dict) -> str:
+    t = tags or {}
+
+    def g(k, dflt="—"):
+        v = t.get(k)
+        return dflt if v is None or v == "" else v
+
+    return (
+        f"{name}（{market}:{symbol}）｜突破有效性={g('breakout')}｜"
+        f"距前高={g('gap_to_prev_high_pct')}%｜前高={g('prev_high')}｜支撑={g('support')}｜"
+        f"回踩支撑={g('pullback_support')}｜量价={g('volume_confirm')}｜"
+        f"建议={g('action_label') or g('action')}｜理由={g('reason')}"
+    )
+
+
+@router.post("/overview")
+async def overview(payload: OverviewIn, db: Session = Depends(get_db)):
+    """把池内各票的最近结论汇总给 AI，按当前吸引力从高到低排序。"""
+    strategy = (
+        db.query(StrategyPrompt).filter(StrategyPrompt.id == payload.strategy_id).first()
+    )
+    if not strategy:
+        raise HTTPException(status_code=404, detail="策略不存在")
+
+    items = (
+        db.query(StrategyAnalysisPoolItem)
+        .order_by(StrategyAnalysisPoolItem.created_at.desc())
+        .all()
+    )
+    analyzed = [it for it in items if it.tags]
+    unanalyzed = [
+        {"symbol": it.symbol, "market": it.market or "CN", "name": it.name or it.symbol}
+        for it in items
+        if not it.tags
+    ]
+    if not analyzed:
+        raise HTTPException(
+            status_code=400, detail="策略池内暂无已分析的股票，请先对个股点「分析」生成结论"
+        )
+
+    by_key = {f"{(it.market or 'CN').upper()}:{it.symbol}": it for it in analyzed}
+    brief_lines = [
+        f"{i}. " + _tags_brief(it.name or it.symbol, it.symbol, it.market or "CN", it.tags or {})
+        for i, it in enumerate(analyzed, 1)
+    ]
+    user_content = (
+        "以下是策略池内各股票最近一次的分析结论：\n"
+        + "\n".join(brief_lines)
+        + "\n\n请依据上述策略标准，把这些股票按「当前买入/持有吸引力」从高到低排序，"
+        "综合考虑突破有效性、量价确认、回踩支撑与位置。\n"
+        "先用中文写一段总体点评，然后在末尾追加结构化排序（HTML 注释，用户看不到），格式严格如下：\n"
+        "<!--PANWATCH_JSON-->\n"
+        '{"summary": "一句话总览", "ranking": [{"symbol": "代码", "market": "CN", "score": 0-100整数, "reason": "一句话"}]}\n'
+        "<!--/PANWATCH_JSON-->\n"
+        "ranking 必须覆盖上面所有股票，best 在前。"
+    )
+
+    ai_client = _get_ai_client(db)
+    try:
+        content = await ai_client.chat(strategy.prompt, user_content, temperature=0.3)
+    except Exception as e:  # noqa: BLE001
+        logger.error("池子总览分析失败: %s", e)
+        raise HTTPException(status_code=502, detail=f"AI 分析失败：{e}") from e
+
+    parsed = try_extract_tagged_json(content) or {}
+    ranking_raw = parsed.get("ranking") if isinstance(parsed, dict) else None
+    summary = (parsed.get("summary") if isinstance(parsed, dict) else "") or ""
+
+    ranked: list[dict] = []
+    seen: set[str] = set()
+    for r in ranking_raw or []:
+        if not isinstance(r, dict):
+            continue
+        sym = str(r.get("symbol") or "").strip()
+        mkt = str(r.get("market") or "CN").strip().upper()
+        key = f"{mkt}:{sym}"
+        it = by_key.get(key)
+        if not it or key in seen:
+            continue
+        seen.add(key)
+        ranked.append(
+            {
+                "rank": len(ranked) + 1,
+                "symbol": it.symbol,
+                "market": it.market or "CN",
+                "name": it.name or it.symbol,
+                "score": r.get("score"),
+                "reason": str(r.get("reason") or ""),
+                "tags": it.tags or {},
+            }
+        )
+    # AI 未覆盖的已分析股票，兜底追加到末尾
+    for it in analyzed:
+        key = f"{(it.market or 'CN').upper()}:{it.symbol}"
+        if key in seen:
+            continue
+        ranked.append(
+            {
+                "rank": len(ranked) + 1,
+                "symbol": it.symbol,
+                "market": it.market or "CN",
+                "name": it.name or it.symbol,
+                "score": None,
+                "reason": "",
+                "tags": it.tags or {},
+            }
+        )
+
+    return {
+        "summary": summary or content.strip()[:400],
+        "ranked": ranked,
+        "unanalyzed": unanalyzed,
+        "model": getattr(ai_client, "model", ""),
+        "analyzed_at": _iso(datetime.now(timezone.utc)),
+    }

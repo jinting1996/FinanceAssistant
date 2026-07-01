@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Download,
   History,
+  ListOrdered,
   Loader2,
   MessageSquare,
   Plus,
@@ -15,12 +16,14 @@ import {
   stocksApi,
   strategyAnalysisApi,
   type StockSearchResult,
+  type StrategyOverview,
   type StrategyPoolItem,
   type StrategyPromptItem,
   type StrategyTags,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { BadgeChip } from '@panwatch/biz-ui/components/badge-chip'
 import { AiSuggestionBadge } from '@panwatch/biz-ui/components/ai-suggestion-badge'
 
@@ -115,6 +118,10 @@ export default function StrategyAnalysisPanel() {
   const [importing, setImporting] = useState(false)
   const [adding, setAdding] = useState(false)
   const [message, setMessage] = useState('')
+
+  const [overviewOpen, setOverviewOpen] = useState(false)
+  const [overviewLoading, setOverviewLoading] = useState(false)
+  const [overview, setOverview] = useState<StrategyOverview | null>(null)
 
   const selected = strategies.find((s) => s.id === selectedId) || null
 
@@ -348,6 +355,26 @@ export default function StrategyAnalysisPanel() {
     )
   }
 
+  // 池子总览：把各票已有结论汇总给 AI，排序
+  const runOverview = async () => {
+    if (!selectedId) {
+      setMessage('请先选择一个策略')
+      return
+    }
+    setOverviewOpen(true)
+    setOverviewLoading(true)
+    setOverview(null)
+    try {
+      const res = await strategyAnalysisApi.overview(selectedId)
+      setOverview(res)
+    } catch (e: any) {
+      setMessage(e?.message || '总览分析失败')
+      setOverviewOpen(false)
+    } finally {
+      setOverviewLoading(false)
+    }
+  }
+
   // 打开上一次的策略对话（查看历史结论，不重新分析）
   const openLastConversation = (item: StrategyPoolItem, conversationId: number) => {
     window.dispatchEvent(
@@ -365,14 +392,26 @@ export default function StrategyAnalysisPanel() {
 
   return (
     <section className="card p-4">
-      <div className="mb-4">
-        <div className="flex items-center gap-2 text-[15px] font-semibold">
-          <Sparkles className="h-4 w-4 text-primary" />
-          策略 AI 分析（对话式）
+      <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-[15px] font-semibold">
+            <Sparkles className="h-4 w-4 text-primary" />
+            策略 AI 分析（对话式）
+          </div>
+          <p className="mt-1 text-[12px] text-muted-foreground">
+            把持仓或手动加入的股票放进策略池，让 AI 以所选策略为准，结合当天与最近行情逐票分析；点「分析」直接开对话，可继续追问。
+          </p>
         </div>
-        <p className="mt-1 text-[12px] text-muted-foreground">
-          把持仓或手动加入的股票放进策略池，让 AI 以所选策略为准，结合当天与最近行情逐票分析；点「分析」直接开对话，可继续追问。
-        </p>
+        <Button
+          variant="secondary"
+          className="shrink-0"
+          onClick={runOverview}
+          disabled={overviewLoading || !selectedId || pool.length === 0}
+          title="汇总池内各票结论，用 AI 排序"
+        >
+          {overviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListOrdered className="h-4 w-4" />}
+          池子总览排序
+        </Button>
       </div>
 
       {message && (
@@ -588,6 +627,63 @@ export default function StrategyAnalysisPanel() {
           </div>
         </div>
       </div>
+
+      <Dialog open={overviewOpen} onOpenChange={setOverviewOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ListOrdered className="h-4 w-4 text-primary" />
+              池子总览排序{selected ? ` · ${selected.name}` : ''}
+            </DialogTitle>
+          </DialogHeader>
+
+          {overviewLoading && (
+            <div className="flex items-center justify-center gap-2 py-12 text-[13px] text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> AI 正在汇总排序…
+            </div>
+          )}
+
+          {!overviewLoading && overview && (
+            <div className="max-h-[70vh] space-y-3 overflow-auto">
+              {overview.summary && (
+                <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-[12px] leading-relaxed text-foreground">
+                  {overview.summary}
+                </div>
+              )}
+              <div className="space-y-2">
+                {overview.ranked.map((r) => (
+                  <div
+                    key={`${r.market}:${r.symbol}`}
+                    className="rounded-lg border border-border/50 bg-background/40 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[12px] font-semibold text-primary">
+                        {r.rank}
+                      </span>
+                      <span className="font-medium text-foreground">{r.name}</span>
+                      <span className="font-mono text-[11px] text-muted-foreground">{r.symbol}</span>
+                      {typeof r.score === 'number' && (
+                        <span className="ml-auto text-[12px] font-semibold text-primary">{r.score} 分</span>
+                      )}
+                    </div>
+                    <StrategyBadges tags={r.tags} />
+                    {r.reason && <div className="mt-1.5 text-[12px] text-muted-foreground">{r.reason}</div>}
+                  </div>
+                ))}
+              </div>
+              {overview.unanalyzed.length > 0 && (
+                <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-600">
+                  以下 {overview.unanalyzed.length} 只尚未分析、未参与排序：
+                  {overview.unanalyzed.map((u) => ` ${u.name}(${u.symbol})`).join('、')}
+                </div>
+              )}
+              <div className="text-[10px] text-muted-foreground">
+                {overview.model} · {overview.analyzed_at}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

@@ -106,4 +106,28 @@ export const strategyAnalysisApi = {
     fetchAPI<{ items: Record<string, { conversation_id: number; updated_at: string; title: string }> }>(
       `/strategy-analysis/last-conversations?strategy_id=${strategyId}`,
     ),
+  overview: (strategyId: number) =>
+    fetchAPI<StrategyOverview>('/strategy-analysis/overview', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id: strategyId }),
+      timeoutMs: 120000,
+    }),
+}
+
+export interface StrategyOverviewRow {
+  rank: number
+  symbol: string
+  market: string
+  name: string
+  score: number | null
+  reason: string
+  tags: StrategyTags
+}
+
+export interface StrategyOverview {
+  summary: string
+  ranked: StrategyOverviewRow[]
+  unanalyzed: Array<{ symbol: string; market: string; name: string }>
+  model: string
+  analyzed_at: string
 }
