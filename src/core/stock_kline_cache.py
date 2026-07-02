@@ -86,14 +86,19 @@ def calculate_increment_days(
 ) -> int:
     """Compute a small fetch window that overlaps cached data for adjustment checks."""
 
+    want = max(1, int(requested_days or 1))
     if not cached:
-        return max(1, int(requested_days or 1))
+        return want
+    # 缓存本数不足以覆盖请求窗口时，做全量拉取回填历史，而非只取小增量
+    # （否则数据新鲜但条数不够时只会重复拉最近几天，历史永远补不上）
+    if len(cached) < want:
+        return want
     latest = _parse_day(cached[-1].date)
     if latest is None:
-        return max(1, int(requested_days or 1))
+        return want
     current = today or date.today()
     delta_days = max(0, (current - latest).days)
-    return min(max(delta_days + 10, 30), max(1, int(requested_days or 1)))
+    return min(max(delta_days + 10, 30), want)
 
 
 def upsert_daily_klines(
