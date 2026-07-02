@@ -566,12 +566,12 @@ async def send_message(
         # 绑定股票的实时数据
         if conv.stock_symbol and conv.stock_market:
             if strategy:
-                # 策略对话：注入当天实时行情 + 最近60根日K + 技术摘要（供策略逐项判断）
+                # 策略对话：注入当天实时行情 + 最近120根日K + 技术摘要（供策略逐项判断）
                 try:
                     from src.web.api.strategy_analysis import _build_market_context
 
                     market_ctx = await _build_market_context(
-                        conv.stock_symbol, conv.stock_market, 60
+                        conv.stock_symbol, conv.stock_market, 120
                     )
                     if market_ctx:
                         context_parts.append(market_ctx)

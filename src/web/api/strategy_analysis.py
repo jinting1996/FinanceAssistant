@@ -266,7 +266,7 @@ def delete_pool_item(item_id: int, db: Session = Depends(get_db)):
 # --------------------------------------------------------------------------- #
 # 行情上下文构建（当天 + 最近行情）
 # --------------------------------------------------------------------------- #
-async def _build_market_context(symbol: str, market: str, kline_days: int = 60) -> str:
+async def _build_market_context(symbol: str, market: str, kline_days: int = 120) -> str:
     """构建喂给 AI 的行情上下文：实时 quote + 最近 N 根日K + 技术摘要。"""
     from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode
@@ -315,7 +315,7 @@ async def _build_market_context(symbol: str, market: str, kline_days: int = 60) 
 
     # 最近 N 根日K
     try:
-        klines = await asyncio.to_thread(collector.get_klines, symbol, kline_days + 10)
+        klines = await asyncio.to_thread(collector.get_klines, symbol, kline_days + 30)
         klines = klines[-kline_days:] if klines else []
         if klines:
             lines = ["## 最近日K（日期 开 高 低 收 成交量）"]
@@ -354,7 +354,7 @@ class AnalyzeIn(BaseModel):
     symbol: str = Field(..., min_length=1)
     market: str = "CN"
     name: str = ""
-    kline_days: int = 60
+    kline_days: int = 120
 
 
 @router.post("/analyze")
@@ -367,7 +367,7 @@ async def analyze_one(payload: AnalyzeIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="策略不存在")
 
     market = (payload.market or "CN").upper()
-    days = max(20, min(int(payload.kline_days or 60), 120))
+    days = max(20, min(int(payload.kline_days or 120), 250))
     market_context = await _build_market_context(payload.symbol, market, days)
     if not market_context:
         raise HTTPException(status_code=502, detail="未能获取该股票的行情数据，稍后再试")
@@ -405,6 +405,132 @@ async def analyze_one(payload: AnalyzeIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return _result_row(row)
+
+
+async def _analyze_pool_item(
+    ai_client,
+    strategy_prompt: str,
+    symbol: str,
+    market: str,
+    name: str,
+    days: int,
+) -> dict:
+    """无头分析单只股票：返回正文、结论、结构化标签（不写库）。"""
+    from src.web.api.chat import STRATEGY_TAG_INSTRUCTION
+
+    market_context = await _build_market_context(symbol, market, days)
+    if not market_context:
+        return {"symbol": symbol, "market": market, "ok": False, "error": "无行情数据"}
+
+    system_prompt = (
+        strategy_prompt
+        + "\n\n---\n你现在是上述策略的分析助手。请严格依据该策略，结合下方提供的行情数据判断。\n\n"
+        + STRATEGY_TAG_INSTRUCTION
+    )
+    user_content = (
+        f"# 待分析股票：{name}（{market}:{symbol}）\n"
+        f"分析时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"{market_context}\n\n"
+        "---\n"
+        "请严格依据上述策略，对该股票当前状态给出判断。\n"
+        "输出要求：第一行用 `【结论】xxx` 给出一句话明确结论"
+        "（如：有效突破/突破待确认/突破失败/不符合/观望），随后分点说明依据（量价、点位、时间）。"
+    )
+    try:
+        content = await ai_client.chat(system_prompt, user_content, temperature=0.3)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("一键重测 %s 失败: %s", symbol, e)
+        return {"symbol": symbol, "market": market, "ok": False, "error": str(e)}
+
+    tags = try_extract_tagged_json(content) or {}
+    return {
+        "symbol": symbol,
+        "market": market,
+        "name": name,
+        "ok": True,
+        "content": content,
+        "verdict": _extract_verdict(content),
+        "tags": tags if isinstance(tags, dict) else {},
+    }
+
+
+class ReanalyzeAllIn(BaseModel):
+    strategy_id: int
+    kline_days: int = 120
+
+
+@router.post("/reanalyze-all")
+async def reanalyze_all(payload: ReanalyzeAllIn, db: Session = Depends(get_db)):
+    """一键重测：用所选策略对策略池内所有股票批量无头分析，回写徽章。"""
+    strategy = (
+        db.query(StrategyPrompt).filter(StrategyPrompt.id == payload.strategy_id).first()
+    )
+    if not strategy:
+        raise HTTPException(status_code=404, detail="策略不存在")
+
+    items = (
+        db.query(StrategyAnalysisPoolItem)
+        .order_by(StrategyAnalysisPoolItem.created_at.desc())
+        .all()
+    )
+    if not items:
+        raise HTTPException(status_code=400, detail="策略池为空，请先加入股票")
+
+    days = max(20, min(int(payload.kline_days or 120), 250))
+    ai_client = _get_ai_client(db)
+
+    # 逐票 AI 分析在网络 I/O 上并发（限并发，避免打爆模型与数据源），DB 写入统一在主协程做
+    sem = asyncio.Semaphore(3)
+
+    async def _run(sym: str, mkt: str, nm: str) -> dict:
+        async with sem:
+            return await _analyze_pool_item(
+                ai_client, strategy.prompt, sym, mkt, nm, days
+            )
+
+    tasks = [
+        _run(it.symbol, (it.market or "CN").upper(), it.name or it.symbol)
+        for it in items
+    ]
+    results = await asyncio.gather(*tasks)
+
+    by_key = {f"{(it.market or 'CN').upper()}:{it.symbol}": it for it in items}
+    analyzed = 0
+    failed: list[dict] = []
+    for res in results:
+        key = f"{res.get('market')}:{res.get('symbol')}"
+        it = by_key.get(key)
+        if not it:
+            continue
+        if not res.get("ok"):
+            failed.append({"symbol": res.get("symbol"), "error": res.get("error", "")})
+            continue
+        tags = res.get("tags") or {}
+        if tags:
+            it.tags = tags
+            it.tags_updated_at = datetime.now()
+        db.add(
+            StrategyAnalysisResult(
+                strategy_id=strategy.id,
+                strategy_name=strategy.name,
+                symbol=it.symbol,
+                market=it.market or "CN",
+                name=it.name or it.symbol,
+                verdict=res.get("verdict", ""),
+                content=res.get("content", ""),
+                model=getattr(ai_client, "model", ""),
+            )
+        )
+        analyzed += 1
+    db.commit()
+
+    return {
+        "total": len(items),
+        "analyzed": analyzed,
+        "failed": failed,
+        "model": getattr(ai_client, "model", ""),
+        "analyzed_at": _iso(datetime.now(timezone.utc)),
+    }
 
 
 @router.get("/results")
