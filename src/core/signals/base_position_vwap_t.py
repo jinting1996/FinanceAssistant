@@ -220,7 +220,7 @@ def compute_base_position_vwap_t(
         and last_three_lows[0] <= last_three_lows[1] <= last_three_lows[2]
         and current > previous_close
     )
-    trend_ok = current >= ma20 * 0.985 and ma20_slope >= -0.003
+    trend_ok = current >= ma20 * 0.97 and ma20_slope >= -0.02
     near_support = support_distance <= max(0.004, 0.15 * atr / current)
     below_vwap = vwap_deviation <= -max(min_vwap_deviation_pct, 0.2 * atr / current)
 
@@ -372,7 +372,7 @@ def compute_base_position_vwap_t_short(
         and last_three_highs[0] >= last_three_highs[1] >= last_three_highs[2]
         and current < previous_close
     )
-    trend_ok = current <= ma20 * 1.015 and ma20_slope <= 0.003
+    trend_ok = current <= ma20 * 1.03 and ma20_slope <= 0.02
     near_resistance = resistance_distance <= max(0.004, 0.15 * atr / current)
     above_vwap = vwap_deviation >= max(min_vwap_deviation_pct, 0.2 * atr / current)
 
