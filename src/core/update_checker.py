@@ -175,16 +175,18 @@ def _human_error(err: str | None) -> str | None:
 
 
 def check_update(current_version: str, proxy: str | None = None) -> dict[str, object]:
-    repo = os.getenv("UPDATE_CHECK_DOCKER_REPO", "sunxiao0721/panwatch")
+    # 默认不指向任何镜像仓库：未显式配置 UPDATE_CHECK_DOCKER_REPO 时不做升级检测，
+    # 避免依赖第三方镜像。自建并发布了镜像的用户可设置该环境变量启用。
+    repo = os.getenv("UPDATE_CHECK_DOCKER_REPO", "").strip()
     force_disable = os.getenv("UPDATE_CHECK_DISABLE", "").strip() in {"1", "true", "True"}
-    if force_disable:
+    if force_disable or not repo:
         return {
             "enabled": False,
             "source": "docker",
             "current_version": _normalize(current_version),
             "latest_version": None,
             "update_available": False,
-            "release_url": f"https://hub.docker.com/r/{repo}/tags",
+            "release_url": f"https://hub.docker.com/r/{repo}/tags" if repo else "",
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "error": _human_error("disabled"),
         }

@@ -159,6 +159,26 @@ make dev-web
 
 访问前端 `http://localhost:5183`，首次使用设置账号密码即可。
 
+### 🐳 Docker 一键部署（推荐生产/服务器）
+
+```bash
+git clone https://github.com/PotatoChipking/finance.git
+cd finance
+
+cp .env.example .env            # 按需填写 AI_API_KEY / 登录账号等（可留默认先跑起来）
+docker compose up -d --build    # 用当前源码构建镜像并后台启动
+```
+
+浏览器打开 `http://<服务器IP>:8000` 即可。镜像完全由本仓库源码构建，不依赖任何外部镜像。
+
+```bash
+docker compose logs -f                    # 看日志
+git pull && docker compose up -d --build  # 升级：拉最新代码后重建
+docker compose down                       # 停止（数据保留在 panwatch_data 卷里）
+```
+
+数据（SQLite、Playwright 浏览器、运行时文件）持久化在 `panwatch_data` 卷，升级不丢。
+
 <details>
 <summary>环境变量</summary>
 
@@ -170,6 +190,7 @@ make dev-web
 | `DATA_DIR` | 数据存储目录 | `./data` |
 | `TZ` | 应用时区（影响 Agent 调度触发时间与时间展示） | `Asia/Shanghai` |
 | `PLAYWRIGHT_SKIP_BROWSER_INSTALL` | 跳过首次 Chromium 安装（不需要截图时可用） | 未设置 |
+| `UPDATE_CHECK_DOCKER_REPO` | 升级检测的镜像仓库（如 `你的用户名/panwatch`）。**默认留空即不检测**，不依赖任何第三方镜像；自建并发布了镜像才需要设置 | 未设置（不检测） |
 | `LOG_LEVEL` | 控制台日志级别。默认 `INFO`（只输出业务事件 + 错误）；排查问题时设 `DEBUG` 可看到调度心跳、采集过程等底层日志。UI 日志板始终保留完整记录，不受影响 | `INFO` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` | 出站 HTTP 代理。三种配置方式任选其一: ① 启动前 `export HTTP_PROXY=...`；② `.env` 里写 `http_proxy=http://host:port`；③ UI「设置 → 全局 HTTP 代理」。三者优先级:外部环境变量 > UI > `.env`。生效后所有 httpx 客户端走代理。`NO_PROXY` 默认包含 `localhost,127.0.0.1` | 未设置 |
 

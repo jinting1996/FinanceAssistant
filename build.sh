@@ -9,7 +9,9 @@ NC='\033[0m' # No Color
 
 # 默认值
 VERSION=${1:-"latest"}
-IMAGE_NAME="sunxiao0721/panwatch"
+# 镜像名：默认本地名 panwatch；要推到自己的仓库时改成 你的用户名/panwatch
+# 或用环境变量覆盖：IMAGE_NAME=youruser/panwatch ./build.sh
+IMAGE_NAME="${IMAGE_NAME:-panwatch}"
 
 echo -e "${GREEN}🚀 PanWatch 构建脚本${NC}"
 echo -e "版本: ${YELLOW}${VERSION}${NC}"

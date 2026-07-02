@@ -1,0 +1,40 @@
+# PanWatch 一键部署（从当前项目源码构建）
+#
+# 快速开始：
+#   1) cp .env.example .env  然后按需填写 AI_API_KEY / 登录账号等
+#   2) docker compose up -d --build
+#   3) 浏览器打开 http://<服务器IP>:8000
+#
+# 默认用当前仓库源码构建镜像（多阶段会自动构建前端），不依赖任何外部镜像。
+# 改了代码后升级：git pull && docker compose up -d --build
+
+services:
+  panwatch:
+    # 本地构建产物的标签（不指向任何远程仓库，compose 会用下面的 build 段构建它）
+    image: panwatch:local
+    build:
+      context: .
+      args:
+        VERSION: local
+    container_name: panwatch
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    # 从 .env 读取 AI/通知/登录等配置（文件不存在时可删掉这一段）
+    env_file:
+      - .env
+    environment:
+      # 时区（影响调度 cron 与日志时间）
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 数据持久化：SQLite、Playwright 浏览器、运行时文件都在这里
+      - panwatch_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  panwatch_data:
