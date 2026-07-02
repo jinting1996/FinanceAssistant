@@ -116,6 +116,7 @@ export default function StrategyAnalysisPanel() {
 
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [reanalyzing, setReanalyzing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -332,6 +333,37 @@ export default function StrategyAnalysisPanel() {
     }
   }
 
+  // ---- 一键重测 = 用当前策略对池内所有股票批量无头分析，回写徽章 ----
+  const reanalyzeAll = async () => {
+    if (!selectedId) {
+      setMessage('请先选择一个策略')
+      return
+    }
+    if (pool.length === 0) {
+      setMessage('策略池为空')
+      return
+    }
+    if (!window.confirm(`将用「${selected?.name}」策略重新分析池内全部 ${pool.length} 只股票，会调用多次 AI，确定继续？`)) {
+      return
+    }
+    setReanalyzing(true)
+    setMessage('AI 正在批量重测，请稍候…')
+    try {
+      const res = await strategyAnalysisApi.reanalyzeAll(selectedId)
+      const failCount = res.failed?.length || 0
+      setMessage(
+        `重测完成：成功 ${res.analyzed}/${res.total} 只` +
+          (failCount ? `，失败 ${failCount} 只（${res.failed.map((f) => f.symbol).join('、')}）` : ''),
+      )
+      await refreshPool()
+      await loadLastConvs(selectedId)
+    } catch (e: any) {
+      setMessage(e?.message || '一键重测失败')
+    } finally {
+      setReanalyzing(false)
+    }
+  }
+
   // ---- 一键分析 = 打开策略对话（复用右下角 ChatWidget），首轮分析作为开场 ----
   const openStrategyChat = (item: StrategyPoolItem) => {
     if (!selected) {
@@ -525,6 +557,16 @@ export default function StrategyAnalysisPanel() {
               >
                 {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 导入持仓
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={reanalyzeAll}
+                disabled={reanalyzing || !selectedId || pool.length === 0}
+                title={selectedId ? '用当前策略重新分析池内全部股票' : '请先选择策略'}
+              >
+                {reanalyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                一键重测
               </Button>
             </div>
           </div>

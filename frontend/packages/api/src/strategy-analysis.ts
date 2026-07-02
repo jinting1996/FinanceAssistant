@@ -98,6 +98,13 @@ export const strategyAnalysisApi = {
       body: JSON.stringify(payload),
       timeoutMs: 120000,
     }),
+  // 一键重测：对策略池内所有股票用当前策略批量无头分析，回写徽章
+  reanalyzeAll: (strategyId: number) =>
+    fetchAPI<StrategyReanalyzeResult>('/strategy-analysis/reanalyze-all', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id: strategyId }),
+      timeoutMs: 300000,
+    }),
   listResults: (strategyId?: number) =>
     fetchAPI<{ items: StrategyAnalysisResultItem[] }>(
       `/strategy-analysis/results${strategyId ? `?strategy_id=${strategyId}` : ''}`,
@@ -116,6 +123,14 @@ export const strategyAnalysisApi = {
       body: JSON.stringify({ strategy_id: strategyId }),
       timeoutMs: 120000,
     }),
+}
+
+export interface StrategyReanalyzeResult {
+  total: number
+  analyzed: number
+  failed: Array<{ symbol: string; error: string }>
+  model: string
+  analyzed_at: string
 }
 
 export interface StrategyOverviewRow {
