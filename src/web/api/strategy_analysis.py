@@ -38,6 +38,13 @@ _DEFAULT_STRATEGY_DESC = ""
 # --------------------------------------------------------------------------- #
 # 序列化
 # --------------------------------------------------------------------------- #
+def _num(value) -> float | None:
+    try:
+        return float(value) if value is not None and value != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _iso(dt) -> str:
     if not dt:
         return ""
@@ -263,10 +270,13 @@ async def _build_market_context(symbol: str, market: str, kline_days: int = 120)
     from src.collectors.kline_collector import KlineCollector
     from src.models.market import MarketCode
 
+    from src.core.breakout_context import build_limit_line, format_daily_klines
+
     mc = MarketCode(market) if market in ("CN", "HK", "US") else MarketCode.CN
     parts: list[str] = []
+    stock_name = ""
 
-    # 实时行情（当天）
+    # 实时行情（当天）+ 涨跌停线判定
     try:
         from src.collectors.akshare_collector import _fetch_tencent_quotes, _tencent_symbol
 
@@ -274,7 +284,8 @@ async def _build_market_context(symbol: str, market: str, kline_days: int = 120)
         rows = await asyncio.to_thread(_fetch_tencent_quotes, [tsym])
         if rows:
             q = rows[0]
-            parts.append(
+            stock_name = str(q.get("name") or "")
+            block = (
                 "## 当天实时行情\n"
                 f"- 名称：{q.get('name', symbol)}\n"
                 f"- 现价：{q.get('current_price', '--')}\n"
@@ -284,37 +295,49 @@ async def _build_market_context(symbol: str, market: str, kline_days: int = 120)
                 f"- 成交量：{q.get('volume', '--')}\n"
                 f"- 成交额：{q.get('turnover', '--')}"
             )
+            if mc == MarketCode.CN:
+                limit_line = build_limit_line(
+                    _num(q.get("change_pct")), _num(q.get("prev_close")),
+                    symbol=symbol, name=stock_name,
+                )
+                if limit_line:
+                    block += "\n" + limit_line
+            parts.append(block)
     except Exception as e:  # noqa: BLE001
         logger.debug("实时行情获取失败 %s: %s", symbol, e)
 
     collector = KlineCollector(mc)
 
-    # 技术摘要（趋势/MA/支撑压力等）
+    # 技术摘要（趋势/MA/量价/多级支撑压力）—— 修正键名并补量能
     try:
         summary = await asyncio.to_thread(collector.get_kline_summary, symbol)
         s = (summary or {}).get("summary") or summary or {}
         if s and not (summary or {}).get("error"):
+            def _g(*keys):
+                for k in keys:
+                    v = s.get(k)
+                    if v is not None and v != "":
+                        return v
+                return "--"
+
             parts.append(
                 "## 技术摘要\n"
-                f"- 趋势：{s.get('trend', '--')}\n"
-                f"- MACD：{s.get('macd_status', '--')}\n"
-                f"- RSI14：{s.get('rsi_14', s.get('rsi6', '--'))}\n"
-                f"- 支撑位：{s.get('support_level', '--')}\n"
-                f"- 压力位：{s.get('resistance_level', '--')}"
+                f"- 趋势：{_g('trend')}\n"
+                f"- MACD：{_g('macd_status')}\n"
+                f"- RSI6：{_g('rsi6')}\n"
+                f"- 量比/量价：{_g('volume_ratio')} / {_g('volume_trend')}\n"
+                f"- 支撑位（短/中/长）：{_g('support_s')} / {_g('support_m')} / {_g('support_l')}\n"
+                f"- 压力位（短/中/长）：{_g('resistance_s')} / {_g('resistance_m')} / {_g('resistance_l')}"
             )
     except Exception as e:  # noqa: BLE001
         logger.debug("技术摘要获取失败 %s: %s", symbol, e)
 
-    # 最近 N 根日K
+    # 最近 N 根日K（带涨跌幅/涨停/放量标记）+ 突破结构（前高锚点）
     try:
         klines = await asyncio.to_thread(collector.get_klines, symbol, kline_days + 30)
         klines = klines[-kline_days:] if klines else []
         if klines:
-            lines = ["## 最近日K（日期 开 高 低 收 成交量）"]
-            for k in klines:
-                lines.append(
-                    f"{k.date} {k.open} {k.high} {k.low} {k.close} {int(k.volume) if k.volume else 0}"
-                )
+            lines = format_daily_klines(klines, symbol=symbol, name=stock_name)
             parts.append("\n".join(lines))
     except Exception as e:  # noqa: BLE001
         logger.debug("日K获取失败 %s: %s", symbol, e)
