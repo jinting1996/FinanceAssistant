@@ -83,6 +83,9 @@ export const strategyAnalysisApi = {
     }),
   deleteStrategy: (id: number) =>
     fetchAPI<{ ok: boolean }>(`/strategy-analysis/strategies/${id}`, { method: 'DELETE' }),
+  // 清空全部策略（含默认），下次拉取会重灌一条空白模板
+  clearStrategies: () =>
+    fetchAPI<{ ok: boolean; deleted: number }>('/strategy-analysis/strategies', { method: 'DELETE' }),
 
   listPool: () => fetchAPI<{ items: StrategyPoolItem[] }>('/strategy-analysis/pool'),
   addPoolItem: (payload: { symbol: string; market?: string; name?: string; note?: string }) =>

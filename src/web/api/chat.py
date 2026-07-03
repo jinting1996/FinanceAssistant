@@ -527,6 +527,16 @@ async def send_message(
             strategy = (
                 db.query(StrategyPrompt).filter(StrategyPrompt.id == conv.strategy_id).first()
             )
+        if strategy:
+            # 排查「策略更新是否生效」：打印实际使用的策略 id/更新时间/正文指纹
+            import hashlib
+
+            _fp = hashlib.md5((strategy.prompt or "").encode("utf-8")).hexdigest()[:8]
+            logger.info(
+                "策略对话使用策略 id=%s name=%s updated_at=%s prompt_len=%s fp=%s",
+                strategy.id, strategy.name, strategy.updated_at,
+                len(strategy.prompt or ""), _fp,
+            )
         if strategy and strategy.prompt:
             system_content = (
                 strategy.prompt

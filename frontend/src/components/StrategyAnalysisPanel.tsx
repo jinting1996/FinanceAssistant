@@ -232,6 +232,27 @@ export default function StrategyAnalysisPanel() {
     setMessage('')
   }
 
+  const clearAllStrategies = async () => {
+    if (!window.confirm('确定清空全部策略吗？这会删除所有策略（含默认），之后系统会重新生成一条空白模板，你需要重新粘入你的策略。')) {
+      return
+    }
+    setSaving(true)
+    setMessage('')
+    try {
+      const res = await strategyAnalysisApi.clearStrategies()
+      setMessage(`已清空 ${res.deleted} 条策略，请新建/粘入你的策略`)
+      setSelectedId(null)
+      setName('')
+      setDescription('')
+      setPrompt('')
+      await loadAll()
+    } catch (e: any) {
+      setMessage(e?.message || '清空失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const removeStrategy = async () => {
     if (!selectedId || !selected || selected.is_default) return
     setSaving(true)
@@ -469,9 +490,21 @@ export default function StrategyAnalysisPanel() {
         <div className="rounded-lg border border-border/60 p-3">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-[13px] font-semibold">分析策略</div>
-            <Button variant="secondary" size="sm" className="h-7 px-2 text-[11px]" onClick={newStrategy}>
-              <Plus className="h-3.5 w-3.5" /> 新建
-            </Button>
+            <div className="flex items-center gap-1.5">
+              <Button variant="secondary" size="sm" className="h-7 px-2 text-[11px]" onClick={newStrategy}>
+                <Plus className="h-3.5 w-3.5" /> 新建
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 px-2 text-[11px] text-destructive"
+                onClick={clearAllStrategies}
+                disabled={saving || strategies.length === 0}
+                title="删除全部策略并重置为空白模板"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> 清空
+              </Button>
+            </div>
           </div>
           <div className="mb-3 flex flex-wrap gap-1.5">
             {strategies.map((s) => (

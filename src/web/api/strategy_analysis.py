@@ -136,8 +136,18 @@ def list_strategies(db: Session = Depends(get_db)):
 
 @router.post("/strategies")
 def create_strategy(payload: StrategyIn, db: Session = Depends(get_db)):
+    """新建策略；若已存在同名策略，则直接覆盖写入该条（避免建出重复导致重测读到旧的）。"""
+    name = payload.name.strip()
+    existing = db.query(StrategyPrompt).filter(StrategyPrompt.name == name).first()
+    if existing:
+        existing.description = payload.description.strip()
+        existing.prompt = payload.prompt
+        existing.enabled = payload.enabled
+        db.commit()
+        db.refresh(existing)
+        return _strategy_row(existing)
     row = StrategyPrompt(
-        name=payload.name.strip(),
+        name=name,
         description=payload.description.strip(),
         prompt=payload.prompt,
         enabled=payload.enabled,
@@ -161,6 +171,17 @@ def update_strategy(strategy_id: int, payload: StrategyIn, db: Session = Depends
     db.commit()
     db.refresh(row)
     return _strategy_row(row)
+
+
+@router.delete("/strategies")
+def clear_strategies(db: Session = Depends(get_db)):
+    """清空全部策略（含默认）。下次拉取列表时会重新灌入一条空白默认模板。
+
+    用于「策略改乱了/存出重复条目」时彻底重置，再把你的策略重新粘进去。
+    """
+    deleted = db.query(StrategyPrompt).delete()
+    db.commit()
+    return {"ok": True, "deleted": int(deleted or 0)}
 
 
 @router.delete("/strategies/{strategy_id}")
@@ -336,6 +357,11 @@ async def _build_market_context(symbol: str, market: str, kline_days: int = 120)
     try:
         klines = await asyncio.to_thread(collector.get_klines, symbol, kline_days + 30)
         klines = klines[-kline_days:] if klines else []
+        # 排查「AI 说 K 线不够」：打印实际喂给 AI 的日K根数
+        logger.info(
+            "策略行情上下文 %s(%s): 实际喂入日K %s 根（目标 %s）",
+            symbol, market, len(klines), kline_days,
+        )
         if klines:
             lines = format_daily_klines(klines, symbol=symbol, name=stock_name)
             parts.append("\n".join(lines))
