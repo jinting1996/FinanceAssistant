@@ -19,6 +19,9 @@ sqlalchemy==2.0.50
 playwright==1.57.0
 PyJWT==2.13.0
 
+# X (Twitter) 舆论采集 — 无需 API Key，免费抓取
+twikit
+
 # 深度分析 — TradingAgents (多 Agent 投资决策框架, 76k star)。
 # 不在 PyPI,用 git+ URL 安装。会拉 langchain/langgraph/yfinance 等较重依赖
 # (~115 个包,首次安装 2-5 分钟)。

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # 代理
     http_proxy: str = ""
 
-    # 通知策略（可通过 UI 的“系统设置”覆盖）
+    # 通知策略（可通过 UI 的"系统设置"覆盖）
     # 静默时间段（本地时区），格式: HH:MM-HH:MM，空为关闭；跨夜示例: 23:00-07:00
     notify_quiet_hours: str = ""
     # 通知失败重试次数（不含首次尝试）
@@ -47,6 +47,16 @@ class Settings(BaseSettings):
         default="Asia/Shanghai",
         validation_alias=AliasChoices("TZ", "APP_TIMEZONE"),
     )
+
+    # ============================================================
+    # X (Twitter) 舆论监控配置
+    # ============================================================
+    # 需要 X 账号用于抓取（建议使用小号，免费）
+    x_username: str = ""
+    x_email: str = ""
+    x_password: str = ""
+    # 是否启用 AI 情感分析（需要 AI_API_KEY 已配置）
+    social_sentiment_enabled: bool = False
 
     model_config = {
         "env_file": ".env",

@@ -67,6 +67,7 @@ class DataCollectorManager:
         from src.collectors.capital_flow_collector import CapitalFlowCollector
         from src.collectors.akshare_collector import AkshareCollector
         from src.collectors.events_collector import EastMoneyEventsCollector
+        from src.collectors.social_collector import XTwitterCollector
 
         self.COLLECTOR_FACTORIES = {
             "news": {
@@ -91,6 +92,13 @@ class DataCollectorManager:
             },
             "events": {
                 "eastmoney": lambda cfg: EastMoneyEventsCollector(),
+            },
+            "social": {
+                "twitter": lambda cfg: XTwitterCollector(
+                    username=cfg.get("x_username", ""),
+                    email=cfg.get("x_email", ""),
+                    password=cfg.get("x_password", ""),
+                ),
             },
         }
 
@@ -353,6 +361,69 @@ class DataCollectorManager:
             self._log("实时行情", "quote", "error", str(e), duration_ms=duration_ms)
             return CollectorResult(success=False, error=str(e), duration_ms=duration_ms)
 
+    async def collect_social(
+        self, symbols: list[str], count: int = 20
+    ) -> CollectorResult:
+        """采集社交媒体舆论（X/Twitter 情感分析）"""
+        from src.collectors.social_collector import SocialSentimentCollector
+        from src.core.ai_client import get_ai_client
+
+        start_time = datetime.now()
+        self._log("社交媒体", "social", "start", f"开始采集 {len(symbols)} 只股票的社交舆论")
+
+        try:
+            # 从环境变量获取 X 配置
+            from src.config import Settings
+            settings = Settings()
+            if not settings.x_username:
+                return CollectorResult(
+                    success=False,
+                    error="X 账号未配置，请设置 X_USERNAME / X_EMAIL / X_PASSWORD 环境变量",
+                    duration_ms=int((datetime.now() - start_time).total_seconds() * 1000),
+                )
+
+            twitter_collector = XTwitterCollector(
+                username=settings.x_username,
+                email=settings.x_email,
+                password=settings.x_password,
+            )
+
+            ai_client = get_ai_client() if settings.social_sentiment_enabled else None
+            sentiment_collector = SocialSentimentCollector(twitter_collector, ai_client)
+
+            summaries = await sentiment_collector.analyze(
+                symbols=symbols,
+                count=count,
+                enable_sentiment=settings.social_sentiment_enabled,
+            )
+
+            # 格式化为可读文本
+            from src.collectors.social_collector import format_sentiment_for_agent
+            formatted = format_sentiment_for_agent(summaries)
+
+            total_posts = sum(s.total_posts for s in summaries)
+
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            self._log(
+                "社交媒体",
+                "social",
+                "success",
+                f"采集完成，共 {total_posts} 条帖子",
+                duration_ms=duration_ms,
+                count=total_posts,
+            )
+
+            return CollectorResult(
+                success=True,
+                data={"summaries": summaries, "formatted": formatted},
+                count=total_posts,
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            self._log("社交媒体", "social", "error", str(e), duration_ms=duration_ms)
+            return CollectorResult(success=False, error=str(e), duration_ms=duration_ms)
+
     async def test_source(self, source: DataSource) -> CollectorResult:
         """测试单个数据源"""
         test_symbols = source.test_symbols or [
@@ -561,6 +632,47 @@ class DataCollectorManager:
                     error=""
                     if items
                     else f"未获取到事件数据（lookback={lookback_days}d）",
+                )
+
+        elif source.type == "social":
+            from src.collectors.social_collector import (
+                XTwitterCollector,
+                SocialSentimentCollector,
+            )
+            from src.config import Settings
+
+            settings = Settings()
+            if not settings.x_username:
+                return CollectorResult(
+                    success=False,
+                    error="X 账号未配置，请在 .env 中设置 X_USERNAME / X_EMAIL / X_PASSWORD",
+                )
+
+            twitter = XTwitterCollector(
+                username=settings.x_username,
+                email=settings.x_email,
+                password=settings.x_password,
+            )
+
+            try:
+                items = await twitter.fetch_posts(test_symbols[:2], count=5)
+                return CollectorResult(
+                    success=len(items) > 0,
+                    data=[
+                        {
+                            "username": i.username,
+                            "content": i.content[:80],
+                            "engagement": i.engagement,
+                        }
+                        for i in items[:5]
+                    ],
+                    count=len(items),
+                    error="" if items else "未获取到推文数据，请检查 X 账号或网络",
+                )
+            except Exception as e:
+                return CollectorResult(
+                    success=False,
+                    error=f"X 采集失败: {e}",
                 )
 
         return CollectorResult(
