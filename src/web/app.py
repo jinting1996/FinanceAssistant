@@ -36,6 +36,7 @@ from src.web.api import (
     tasks,
     backtests,
     t_monitor,
+    social,
 )
 from src.web.api import insights
 from src.web.api.auth import get_current_user
@@ -54,7 +55,7 @@ async def app_lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PanWatch API",
+    title="FinanceAssistant API",
     version="0.1.0",
     lifespan=app_lifespan,
     redirect_slashes=False,  # 避免重定向丢失 Authorization header
@@ -225,6 +226,12 @@ app.include_router(
     system.router,
     prefix="/api/system",
     tags=["system"],
+    dependencies=protected,
+)
+app.include_router(
+    social.router,
+    prefix="/api/social",
+    tags=["social"],
     dependencies=protected,
 )
 
