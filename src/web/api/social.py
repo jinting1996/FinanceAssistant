@@ -2,9 +2,10 @@
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.web.database import get_db
@@ -23,8 +24,8 @@ class SocialItemResponse(BaseModel):
     display_name: str
     content: str
     publish_time: str = ""
-    symbols: list[str] = []
-    metrics: dict[str, int] = {}
+    symbols: list[str] = Field(default_factory=list)
+    metrics: dict[str, int] = Field(default_factory=dict)
     url: str = ""
     sentiment: str = ""
     sentiment_score: float = 0.0
@@ -44,11 +45,11 @@ class SentimentSummaryResponse(BaseModel):
     positive_ratio: float = 0.0
     negative_ratio: float = 0.0
     analyzed_at: str = ""
-    top_posts: list[SocialItemResponse] = []
+    top_posts: list[SocialItemResponse] = Field(default_factory=list)
 
 
 class SocialSentimentRequest(BaseModel):
-    symbols: list[str] = []
+    symbols: list[str] = Field(default_factory=list)
     count: int = 20
 
 

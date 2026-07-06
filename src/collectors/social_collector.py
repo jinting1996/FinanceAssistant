@@ -189,27 +189,18 @@ class XTwitterCollector(BaseSocialCollector):
                 auth_info_2=self.email,
                 password=self.password,
             )
-            # 保存 cookie
-            client.save_cookies(str(self.cookie_path))
+            # 保存 cookie（兼容 twikit 不同版本的 API）
+            self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                client.save_cookies(str(self.cookie_path))
+            except Exception:
+                cookies = client.get_cookies()
+                self.cookie_path.write_text(json.dumps(cookies))
             logger.info("X 登录成功，cookie 已保存")
             return True
         except Exception as e:
             logger.error(f"X 登录失败: {e}")
-            # 尝试用 set_cookies 代替（兼容不同版本）
-            try:
-                await client.login(
-                    auth_info_1=self.username,
-                    auth_info_2=self.email,
-                    password=self.password,
-                )
-                cookies = client.get_cookies()
-                self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
-                self.cookie_path.write_text(json.dumps(cookies))
-                logger.info("X 登录成功 (备用方式)")
-                return True
-            except Exception as e2:
-                logger.error(f"X 登录彻底失败: {e2}")
-                return False
+            return False
 
     def _check_rate_limit(self):
         """检查并等待速率限制"""
