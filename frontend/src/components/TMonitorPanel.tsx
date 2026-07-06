@@ -24,8 +24,25 @@ interface TMonitorState {
   support_price: number | null
   stop_loss_price: number | null
   target_price: number | null
-  context?: { reason?: string; data_quality?: string; direction?: string; skip_reason?: string }
+  context?: {
+    reason?: string
+    data_quality?: string
+    direction?: string
+    skip_reason?: string
+    score_detail?: Record<string, boolean>
+    score_side?: string
+  }
 }
+
+// 做T评分的各加分项:key 对应后端 score_detail,label 按多/空方向区分文案
+const SCORE_CHECKS: { key: string; weight: number; label: (short: boolean) => string; hint: (short: boolean) => string }[] = [
+  { key: 'trend', weight: 20, label: () => '趋势', hint: s => s ? '日线未单边强势上涨,适合高抛' : '日线趋势未破且 MA20 未明显向下' },
+  { key: 'support', weight: 20, label: s => s ? '近压力' : '近支撑', hint: s => s ? '当前价接近压力位' : '当前价接近支撑位' },
+  { key: 'vwap', weight: 15, label: s => s ? '高于VWAP' : '低于VWAP', hint: s => s ? '当前价高于 VWAP 足够幅度' : '当前价低于 VWAP 足够幅度' },
+  { key: 'reversal', weight: 20, label: s => s ? '滞涨反转' : '止跌反转', hint: s => s ? '最近三根分钟K高点走低并滞涨' : '最近三根分钟K低点抬高并止跌' },
+  { key: 'coverage', weight: 10, label: () => '数据充足', hint: () => '分钟数据覆盖满足盘中判断' },
+  { key: 'reward', weight: 15, label: () => '盈亏比', hint: () => '预期盈亏比 ≥ 1' },
+]
 
 const stateLabels: Record<string, string> = {
   idle: '观察',
@@ -221,6 +238,29 @@ export default function TMonitorPanel() {
                   </div>
                 </div>
               </div>
+              {row.context?.score_detail && (
+                <div className="mt-2 flex flex-wrap items-center gap-1">
+                  {SCORE_CHECKS.map(check => {
+                    const scoreShort = row.context?.score_side === 'short'
+                    const hit = !!row.context?.score_detail?.[check.key]
+                    return (
+                      <span
+                        key={check.key}
+                        title={`${check.hint(scoreShort)}(+${check.weight}分)${hit ? '' : ',当前未得分'}`}
+                        className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-tight border ${
+                          hit
+                            ? scoreShort
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                              : 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                            : 'border-border/50 bg-muted/40 text-muted-foreground/60'
+                        }`}
+                      >
+                        {check.label(scoreShort)} +{check.weight}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
               {row.context?.reason && <div className="text-[11px] text-muted-foreground mt-2 line-clamp-2">{row.context.reason}</div>}
               {row.context?.skip_reason && (
                 <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">

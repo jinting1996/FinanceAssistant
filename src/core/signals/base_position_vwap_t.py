@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -161,6 +161,8 @@ class TSignalResult:
     target_price: float | None
     data_quality: str
     metrics: dict[str, float | bool | None]
+    # 各加分项是否得分(trend/support/vwap/reversal/coverage/reward),供前端标签展示
+    score_detail: dict[str, bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -233,24 +235,32 @@ def compute_base_position_vwap_t(
     target = max(vwap, current * (1.0 + eff_profit))
     reward_risk = (target - current) / max(current - stop, 1e-9)
 
+    checks = {
+        "trend": trend_ok,
+        "support": near_support,
+        "vwap": below_vwap,
+        "reversal": reversal,
+        "coverage": len(minute) >= 20,
+        "reward": reward_risk >= 1.0,
+    }
     evidence: list[str] = []
     score = 0
-    if trend_ok:
+    if checks["trend"]:
         score += 20
         evidence.append("日线趋势未破且 MA20 未明显向下")
-    if near_support:
+    if checks["support"]:
         score += 20
         evidence.append(f"当前价接近支撑位 {support:.3f}")
-    if below_vwap:
+    if checks["vwap"]:
         score += 15
         evidence.append(f"当前价低于 VWAP {vwap:.3f}")
-    if reversal:
+    if checks["reversal"]:
         score += 20
         evidence.append("最近三根分钟K低点抬高并出现止跌")
-    if len(minute) >= 20:
+    if checks["coverage"]:
         score += 10
         evidence.append("分钟数据覆盖满足盘中判断")
-    if reward_risk >= 1.0:
+    if checks["reward"]:
         score += 15
         evidence.append(f"预期盈亏比 {reward_risk:.2f}")
 
@@ -295,6 +305,7 @@ def compute_base_position_vwap_t(
             "eff_stop_cap_pct": round(eff_stop_cap, 6),
             "reversal": reversal,
         },
+        score_detail={key: bool(value) for key, value in checks.items()},
     )
 
 
@@ -384,24 +395,32 @@ def compute_base_position_vwap_t_short(
     target = min(vwap, current * (1.0 - eff_profit))
     reward_risk = (current - target) / max(stop - current, 1e-9)
 
+    checks = {
+        "trend": trend_ok,
+        "support": near_resistance,
+        "vwap": above_vwap,
+        "reversal": reversal,
+        "coverage": len(minute) >= 20,
+        "reward": reward_risk >= 1.0,
+    }
     evidence: list[str] = []
     score = 0
-    if trend_ok:
+    if checks["trend"]:
         score += 20
         evidence.append("日线未单边强势上涨,适合高抛")
-    if near_resistance:
+    if checks["support"]:
         score += 20
         evidence.append(f"当前价接近压力位 {resistance:.3f}")
-    if above_vwap:
+    if checks["vwap"]:
         score += 15
         evidence.append(f"当前价高于 VWAP {vwap:.3f}")
-    if reversal:
+    if checks["reversal"]:
         score += 20
         evidence.append("最近三根分钟K高点走低并出现滞涨")
-    if len(minute) >= 20:
+    if checks["coverage"]:
         score += 10
         evidence.append("分钟数据覆盖满足盘中判断")
-    if reward_risk >= 1.0:
+    if checks["reward"]:
         score += 15
         evidence.append(f"预期盈亏比 {reward_risk:.2f}")
 
@@ -446,6 +465,7 @@ def compute_base_position_vwap_t_short(
             "eff_stop_cap_pct": round(eff_stop_cap, 6),
             "reversal": reversal,
         },
+        score_detail={key: bool(value) for key, value in checks.items()},
     )
 
 
