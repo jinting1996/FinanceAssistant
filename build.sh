@@ -10,8 +10,8 @@ NC='\033[0m' # No Color
 # 默认值
 VERSION=${1:-"latest"}
 # 镜像名：默认本地名 FinanceAssistant；要推到自己的仓库时改成 你的用户名/FinanceAssistant
-# 或用环境变量覆盖：IMAGE_NAME=youruser/FinanceAssistant ./build.sh
-IMAGE_NAME="${IMAGE_NAME:-FinanceAssistant}"
+# 或用环境变量覆盖：IMAGE_NAME=youruser/financeassistant ./build.sh
+IMAGE_NAME="${IMAGE_NAME:-financeassistant}"
 
 echo -e "${GREEN}🚀 FinanceAssistant 构建脚本${NC}"
 echo -e "版本: ${YELLOW}${VERSION}${NC}"
@@ -56,7 +56,7 @@ echo ""
 echo -e "${GREEN}🎉 构建完成！${NC}"
 echo ""
 echo "运行容器:"
-echo -e "  ${YELLOW}docker run -d -p 8000:8000 -v FinanceAssistant_data:/app/data ${FULL_IMAGE}${NC}"
+echo -e "  ${YELLOW}docker run -d -p 8000:8000 -v financeassistant_data:/app/data ${FULL_IMAGE}${NC}"
 echo ""
 echo "推送镜像:"
 echo -e "  ${YELLOW}docker push ${FULL_IMAGE}${NC}"
