@@ -7,13 +7,14 @@ X (Twitter) 舆论采集器 - 集成情感分析
     items = await collector.analyze(["AAPL", "TSLA"], count=20)
 """
 
+import asyncio
 import json
 import logging
 import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -266,7 +267,6 @@ class XTwitterCollector(BaseSocialCollector):
             # 速率限制
             wait = self._check_rate_limit()
             if wait > 0:
-                import asyncio
                 await asyncio.sleep(wait)
 
             try:
@@ -330,7 +330,6 @@ class XTwitterCollector(BaseSocialCollector):
                 logger.info(f"  {symbol}: 获取 {count_added} 条推文")
 
                 # 搜索间隔
-                import asyncio
                 await asyncio.sleep(self.SEARCH_COOLDOWN)
 
             except Exception as e:

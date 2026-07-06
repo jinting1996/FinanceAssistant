@@ -365,8 +365,11 @@ class DataCollectorManager:
         self, symbols: list[str], count: int = 20
     ) -> CollectorResult:
         """采集社交媒体舆论（X/Twitter 情感分析）"""
-        from src.collectors.social_collector import SocialSentimentCollector
-        from src.core.ai_client import get_ai_client
+        from src.collectors.social_collector import (
+            XTwitterCollector,
+            SocialSentimentCollector,
+        )
+        from src.core.ai_client import AIClient
 
         start_time = datetime.now()
         self._log("社交媒体", "social", "start", f"开始采集 {len(symbols)} 只股票的社交舆论")
@@ -388,7 +391,13 @@ class DataCollectorManager:
                 password=settings.x_password,
             )
 
-            ai_client = get_ai_client() if settings.social_sentiment_enabled else None
+            ai_client = None
+            if settings.social_sentiment_enabled and settings.ai_api_key:
+                ai_client = AIClient(
+                    base_url=settings.ai_base_url,
+                    api_key=settings.ai_api_key,
+                    model=settings.ai_model,
+                )
             sentiment_collector = SocialSentimentCollector(twitter_collector, ai_client)
 
             summaries = await sentiment_collector.analyze(
@@ -635,10 +644,7 @@ class DataCollectorManager:
                 )
 
         elif source.type == "social":
-            from src.collectors.social_collector import (
-                XTwitterCollector,
-                SocialSentimentCollector,
-            )
+            from src.collectors.social_collector import XTwitterCollector
             from src.config import Settings
 
             settings = Settings()
