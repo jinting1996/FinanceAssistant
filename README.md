@@ -1,4 +1,4 @@
-# 盯盘侠 PanWatch
+# 盯盘侠 FinanceAssistant
 
 自托管 AI 盯盘助手，覆盖 A 股 / 港股 / 美股，集成 TradingAgents 多 Agent 投资决策、事件日历、板块轮动、X 舆论监控与全渠道推送。
 
@@ -153,7 +153,7 @@ cp .env.example .env            # 按需填写 AI_API_KEY 等
 docker compose up -d --build    # 构建镜像并后台启动
 ```
 
-浏览器打开 `http://<服务器IP>:8000`。数据（SQLite、Playwright 浏览器、运行时文件）持久化在 `panwatch_data` 卷中，升级不丢失。
+浏览器打开 `http://<服务器IP>:8000`。数据（SQLite、Playwright 浏览器、运行时文件）持久化在 `FinanceAssistant_data` 卷中，升级不丢失。
 
 ```bash
 docker compose logs -f                     # 查看日志
@@ -177,7 +177,7 @@ docker pull ghcr.io/jinting1996/financeassistant:latest
 
 ### NAS 部署
 
-绿联等 NAS 设备可直接使用预构建镜像。将 `docker-compose.yml` 中的 `image: panwatch:local` 替换为 `wwkisu/financeassistant:latest`，删除 `build:` 段，按需修改端口和数据卷路径即可。
+绿联等 NAS 设备可直接使用预构建镜像。将 `docker-compose.yml` 中的 `image: FinanceAssistant:local` 替换为 `wwkisu/financeassistant:latest`，删除 `build:` 段，按需修改端口和数据卷路径即可。
 
 ## 配置指南
 

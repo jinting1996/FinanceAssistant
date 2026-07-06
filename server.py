@@ -1,4 +1,4 @@
-"""PanWatch 统一服务入口 - Web 后台 + Agent 调度"""
+"""FinanceAssistant 统一服务入口 - Web 后台 + Agent 调度"""
 
 import logging
 import os
@@ -154,7 +154,7 @@ def setup_logging():
 
     # reload/server restart 时避免重复 handler 导致日志放大。
     for h in list(root.handlers):
-        if isinstance(h, DBLogHandler) or getattr(h, "_panwatch_console", False):
+        if isinstance(h, DBLogHandler) or getattr(h, "_FinanceAssistant_console", False):
             root.removeHandler(h)
             try:
                 h.close()
@@ -163,7 +163,7 @@ def setup_logging():
 
     # 控制台输出: 按 LOG_LEVEL 过滤,且丢弃三方库的低级别噪音
     console = logging.StreamHandler()
-    console._panwatch_console = True  # type: ignore[attr-defined]
+    console._FinanceAssistant_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
     console.addFilter(_ConsoleNoiseFilter())
     console.setFormatter(
