@@ -295,11 +295,17 @@ class XTwitterCollector(BaseSocialCollector):
 
                     # 指标
                     metrics = {}
-                    for field in ["favorite_count", "retweet_count", "reply_count", "view_count"]:
+                    metric_map = {
+                        "favorite_count": "likes",
+                        "retweet_count": "retweets",
+                        "reply_count": "replies",
+                        "view_count": "views",
+                    }
+                    for attr_name, metric_key in metric_map.items():
                         try:
-                            val = getattr(tweet, field, 0)
+                            val = getattr(tweet, attr_name, 0)
                             if val:
-                                metrics[field.replace("_count", "s").replace("favorites", "likes")] = int(val)
+                                metrics[metric_key] = int(val)
                         except Exception:
                             pass
 
