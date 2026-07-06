@@ -522,10 +522,15 @@ score 含义: 0.0=极度负面, 0.5=中性, 1.0=极度正面
             return None
         # 尝试提取 JSON 块
         text = text.strip()
-        # 去掉 markdown 代码块
+        # 去掉 markdown 代码块（支持 ```json ... ``` 格式）
         if text.startswith("```"):
             lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+            # 去掉首行 (```json 或 ```) 和末行 (```)
+            if len(lines) > 2:
+                text = "\n".join(lines[1:-1])
+            else:
+                # 只有 ```json{...}``` 单行情况
+                text = text.replace("```json", "").replace("```", "").strip()
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -546,6 +551,8 @@ score 含义: 0.0=极度负面, 0.5=中性, 1.0=极度正面
         positive = [i for i in items if i.sentiment == "positive"]
         negative = [i for i in items if i.sentiment == "negative"]
         neutral = [i for i in items if i.sentiment == "neutral"]
+        # 未做情感分析的帖子也计入中性（sentiment 为空字符串）
+        unanalyzed = len(items) - len(positive) - len(negative) - len(neutral)
 
         scores = [i.sentiment_score for i in items if i.sentiment]
 
@@ -557,7 +564,7 @@ score 含义: 0.0=极度负面, 0.5=中性, 1.0=极度正面
             total_posts=len(items),
             positive_count=len(positive),
             negative_count=len(negative),
-            neutral_count=len(neutral),
+            neutral_count=len(neutral) + unanalyzed,
             avg_score=sum(scores) / len(scores) if scores else 0.5,
             top_posts=top_posts,
             analyzed_at=datetime.now(),
