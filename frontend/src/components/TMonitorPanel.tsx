@@ -220,7 +220,13 @@ export default function TMonitorPanel() {
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mt-3">
                 {[
                   { label: '现价', value: price(row.current_price), cls: 'text-foreground' },
-                  { label: 'VWAP', value: price(row.vwap), cls: 'text-foreground' },
+                  {
+                    label: row.current_price != null && row.vwap != null && row.vwap > 0
+                      ? `VWAP ${row.current_price >= row.vwap ? '+' : ''}${((row.current_price / row.vwap - 1) * 100).toFixed(2)}%`
+                      : 'VWAP',
+                    value: price(row.vwap),
+                    cls: 'text-foreground',
+                  },
                   { label: short ? '压力' : '支撑', value: price(row.support_price), cls: 'text-foreground' },
                   { label: '止损', value: price(row.stop_loss_price), cls: short ? 'text-rose-600' : 'text-emerald-600' },
                   { label: '目标', value: price(row.target_price), cls: short ? 'text-emerald-600' : 'text-rose-600' },
