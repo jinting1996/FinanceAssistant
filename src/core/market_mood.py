@@ -28,7 +28,11 @@ def fetch_sector_flows(top_n: int = 5) -> list[dict[str, Any]]:
     """行业板块今日主力净流入排行(前 top_n 流入 + 后 top_n 流出)。"""
     import akshare as ak
 
+    import pandas as pd
+
     df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
+    if df is None or df.empty:
+        raise ValueError("行业资金流返回为空")
     cols = df.columns.tolist()
     name_col = _pick_column(cols, "名称")
     change_col = _pick_column(cols, "涨跌幅")
@@ -37,7 +41,22 @@ def fetch_sector_flows(top_n: int = 5) -> list[dict[str, Any]]:
     if not name_col or not amount_col:
         raise ValueError(f"行业资金流字段不符合预期: {cols}")
 
+    # 数据源里 '-' 之类的脏值按行跳过,不拖垮整个列表
+    df = df.copy()
+    df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce")
     df = df.dropna(subset=[amount_col]).sort_values(amount_col, ascending=False)
+    if df.empty:
+        raise ValueError("行业资金流净额列无有效数值")
+
+    def _num(row, col) -> float | None:
+        if not col:
+            return None
+        try:
+            value = float(row[col])
+        except Exception:
+            return None
+        return value if value == value else None  # NaN 过滤
+
     rows = []
     picked = list(df.head(top_n).iterrows()) + list(df.tail(top_n).iterrows())
     seen: set[str] = set()
@@ -46,12 +65,14 @@ def fetch_sector_flows(top_n: int = 5) -> list[dict[str, Any]]:
         if name in seen:
             continue
         seen.add(name)
+        ratio = _num(row, ratio_col)
+        change = _num(row, change_col)
         rows.append(
             {
                 "name": name,
                 "main_net_inflow_yi": round(float(row[amount_col]) / YI, 2),
-                "main_net_ratio_pct": round(float(row[ratio_col]), 2) if ratio_col else None,
-                "change_pct": round(float(row[change_col]), 2) if change_col else None,
+                "main_net_ratio_pct": round(ratio, 2) if ratio is not None else None,
+                "change_pct": round(change, 2) if change is not None else None,
             }
         )
     return rows
@@ -69,11 +90,24 @@ def fetch_market_flow() -> dict[str, Any]:
     sh_change_col = _pick_column(cols, "上证", "涨跌幅")
     sz_change_col = _pick_column(cols, "深证", "涨跌幅")
     last = df.iloc[-1]
+
+    def _num(col) -> float | None:
+        if not col:
+            return None
+        try:
+            value = float(last[col])
+        except Exception:
+            return None
+        return value if value == value else None  # NaN 过滤
+
+    main = _num(main_col)
+    sh = _num(sh_change_col)
+    sz = _num(sz_change_col)
     return {
         "date": str(last[cols[0]]),
-        "main_net_inflow_yi": round(float(last[main_col]) / YI, 2) if main_col else None,
-        "sh_change_pct": round(float(last[sh_change_col]), 2) if sh_change_col else None,
-        "sz_change_pct": round(float(last[sz_change_col]), 2) if sz_change_col else None,
+        "main_net_inflow_yi": round(main / YI, 2) if main is not None else None,
+        "sh_change_pct": round(sh, 2) if sh is not None else None,
+        "sz_change_pct": round(sz, 2) if sz is not None else None,
     }
 
 

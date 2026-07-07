@@ -29,6 +29,7 @@ interface MarketMood {
     label: string
     confidence: number
   } | null
+  errors?: string[]
   updated_at: string
 }
 
@@ -70,6 +71,7 @@ export default function MarketMoodCards() {
     .sort((a, b) => a.main_net_inflow_yi - b.main_net_inflow_yi)
     .slice(0, 3)
   const maxAbs = Math.max(1, ...[...inflows, ...outflows].map(s => Math.abs(s.main_net_inflow_yi)))
+  const sectorError = (mood?.errors || []).find(e => e.includes('板块资金流'))
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -120,7 +122,7 @@ export default function MarketMoodCards() {
             </div>
           </>
         ) : (
-          <div className="text-[12px] text-muted-foreground py-3">{error ? '情绪数据获取失败' : '加载中…'}</div>
+          <div className="text-[12px] text-muted-foreground py-3">{error || mood ? '情绪数据获取失败' : '加载中…'}</div>
         )}
       </div>
 
@@ -155,8 +157,17 @@ export default function MarketMoodCards() {
               </div>
             ))}
           </div>
+        ) : mood || error ? (
+          <div className="py-2">
+            <div className="text-[12px] text-muted-foreground">板块资金流获取失败</div>
+            {sectorError && (
+              <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400 break-all line-clamp-3" title={sectorError}>
+                {sectorError}
+              </div>
+            )}
+          </div>
         ) : (
-          <div className="text-[12px] text-muted-foreground py-3">{error ? '板块资金流获取失败' : '加载中…'}</div>
+          <div className="text-[12px] text-muted-foreground py-3">加载中…</div>
         )}
       </div>
     </div>
