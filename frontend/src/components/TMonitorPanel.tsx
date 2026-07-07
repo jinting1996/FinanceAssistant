@@ -30,6 +30,7 @@ interface TMonitorState {
     direction?: string
     skip_reason?: string
     t_scores?: Partial<Record<'long' | 'short', { score: number; detail: Record<string, boolean> }>>
+    vwap_gate_pct?: number | null
   }
 }
 
@@ -221,8 +222,11 @@ export default function TMonitorPanel() {
                 {[
                   { label: '现价', value: price(row.current_price), cls: 'text-foreground' },
                   {
+                    // 标签显示 当前偏离/得分门槛,如 "VWAP -0.42/±0.80%":偏离超过 ±门槛 才拿 VWAP 分
                     label: row.current_price != null && row.vwap != null && row.vwap > 0
-                      ? `VWAP ${row.current_price >= row.vwap ? '+' : ''}${((row.current_price / row.vwap - 1) * 100).toFixed(2)}%`
+                      ? `VWAP ${row.current_price >= row.vwap ? '+' : ''}${((row.current_price / row.vwap - 1) * 100).toFixed(2)}${
+                          row.context?.vwap_gate_pct ? `/±${(row.context.vwap_gate_pct * 100).toFixed(2)}` : ''
+                        }%`
                       : 'VWAP',
                     value: price(row.vwap),
                     cls: 'text-foreground',

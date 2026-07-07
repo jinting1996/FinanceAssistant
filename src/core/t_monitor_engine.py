@@ -219,7 +219,11 @@ class TMonitorEngine:
             state.score = _disp_sig.score
             if _disp_sig.vwap:
                 state.vwap = _disp_sig.vwap
-            state.context = {**(state.context or {}), "t_scores": t_scores}
+            state.context = {
+                **(state.context or {}),
+                "t_scores": t_scores,
+                "vwap_gate_pct": _disp_sig.metrics.get("vwap_gate_pct"),
+            }
 
         # --- 离场态:实时重算"离场质量分"(平仓本质是反向入场) ---
         if state.state == "waiting_exit":
@@ -370,6 +374,7 @@ class TMonitorEngine:
                 state.vwap = display_signal.vwap
                 context = {**display_signal.to_dict(), "position_ratio": position_ratio}
                 context["t_scores"] = t_scores
+                context["vwap_gate_pct"] = display_signal.metrics.get("vwap_gate_pct")
                 if skip_reason:
                     context["skip_reason"] = skip_reason
                 state.context = context
@@ -384,6 +389,7 @@ class TMonitorEngine:
         context["position_ratio"] = position_ratio
         context["direction"] = side
         context["t_scores"] = t_scores
+        context["vwap_gate_pct"] = signal.metrics.get("vwap_gate_pct")
         state.score = signal.score
         state.current_price = signal.current_price
         state.vwap = signal.vwap
