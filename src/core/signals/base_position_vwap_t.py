@@ -224,7 +224,8 @@ def compute_base_position_vwap_t(
     )
     trend_ok = current >= ma20 * 0.97 and ma20_slope >= -0.02
     near_support = support_distance <= max(0.004, 0.15 * atr / current)
-    below_vwap = vwap_deviation <= -max(min_vwap_deviation_pct, 0.2 * atr / current)
+    vwap_gate = max(min_vwap_deviation_pct, 0.2 * atr / current)
+    below_vwap = vwap_deviation <= -vwap_gate
 
     # 止盈/止损上限按 ATR 自适应:固定值作地板,波动大时自动放大。
     atr_ratio = atr / current
@@ -298,6 +299,7 @@ def compute_base_position_vwap_t(
             "ma20_slope": round(ma20_slope, 6),
             "atr14": round(atr, 4),
             "vwap_deviation": round(vwap_deviation, 6),
+            "vwap_gate_pct": round(vwap_gate, 6),
             "support_distance": round(support_distance, 6),
             "stop_risk": round(stop_risk, 6),
             "reward_risk": round(reward_risk, 4),
@@ -385,7 +387,8 @@ def compute_base_position_vwap_t_short(
     )
     trend_ok = current <= ma20 * 1.03 and ma20_slope <= 0.02
     near_resistance = resistance_distance <= max(0.004, 0.15 * atr / current)
-    above_vwap = vwap_deviation >= max(min_vwap_deviation_pct, 0.2 * atr / current)
+    vwap_gate = max(min_vwap_deviation_pct, 0.2 * atr / current)
+    above_vwap = vwap_deviation >= vwap_gate
 
     atr_ratio = atr / current
     eff_profit = max(min_profit_pct, profit_atr_mult * atr_ratio)
@@ -458,6 +461,7 @@ def compute_base_position_vwap_t_short(
             "ma20_slope": round(ma20_slope, 6),
             "atr14": round(atr, 4),
             "vwap_deviation": round(vwap_deviation, 6),
+            "vwap_gate_pct": round(vwap_gate, 6),
             "resistance_distance": round(resistance_distance, 6),
             "stop_risk": round(stop_risk, 6),
             "reward_risk": round(reward_risk, 4),

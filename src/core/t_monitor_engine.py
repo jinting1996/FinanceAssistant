@@ -200,23 +200,29 @@ class TMonitorEngine:
         # 这里按方向先算一个"当前做T质量分"兜底刷新;idle/离场分支会用各自更
         # 精确的分数覆盖。score 是离散打分,反映 setup 质量而非价格高低。
         _direction = str(params.get("direction", "both") or "both").lower()
-        _disp_sig: Any = None
-        _disp_side = "long"
+        _long_sig: Any = None
+        _short_sig: Any = None
         if _direction in {"both", "long"}:
-            _disp_sig = compute_base_position_vwap_t(daily, minute, **thresholds)
+            _long_sig = compute_base_position_vwap_t(daily, minute, **thresholds)
         if _direction in {"both", "short"}:
             _short_sig = compute_base_position_vwap_t_short(daily, minute, **thresholds)
-            if _disp_sig is None or _short_sig.score > _disp_sig.score:
-                _disp_sig = _short_sig
-                _disp_side = "short"
+        # 双向评分明细都放进 context,前端正T/倒T各显示一行指标标签
+        t_scores: dict[str, Any] = {}
+        if _long_sig is not None:
+            t_scores["long"] = {"score": _long_sig.score, "detail": _long_sig.score_detail}
+        if _short_sig is not None:
+            t_scores["short"] = {"score": _short_sig.score, "detail": _short_sig.score_detail}
+        _disp_sig = _long_sig
+        if _short_sig is not None and (_disp_sig is None or _short_sig.score > _disp_sig.score):
+            _disp_sig = _short_sig
         if _disp_sig is not None:
             state.score = _disp_sig.score
             if _disp_sig.vwap:
                 state.vwap = _disp_sig.vwap
             state.context = {
                 **(state.context or {}),
-                "score_detail": _disp_sig.score_detail,
-                "score_side": _disp_side,
+                "t_scores": t_scores,
+                "vwap_gate_pct": _disp_sig.metrics.get("vwap_gate_pct"),
             }
 
         # --- 离场态:实时重算"离场质量分"(平仓本质是反向入场) ---
@@ -230,13 +236,7 @@ class TMonitorEngine:
             )
             sell_sig = compute_base_position_vwap_t_short(daily, minute, **thresholds)
             entry = float(state.entry_price or current)
-            ctx = {
-                **(state.context or {}),
-                "exit_score": sell_sig.score,
-                "exit_reason": sell_sig.reason,
-                "score_detail": sell_sig.score_detail,
-                "score_side": "short",
-            }
+            ctx = {**(state.context or {}), "exit_score": sell_sig.score, "exit_reason": sell_sig.reason}
             # 跟踪止盈:进入盈利区后记录最高价,自高点回落 trail_pct 才卖
             trail_hit = False
             if trail_mode:
@@ -277,13 +277,7 @@ class TMonitorEngine:
             )
             buy_sig = compute_base_position_vwap_t(daily, minute, **thresholds)
             entry = float(state.entry_price or current)
-            ctx = {
-                **(state.context or {}),
-                "buyback_score": buy_sig.score,
-                "buyback_reason": buy_sig.reason,
-                "score_detail": buy_sig.score_detail,
-                "score_side": "long",
-            }
+            ctx = {**(state.context or {}), "buyback_score": buy_sig.score, "buyback_reason": buy_sig.reason}
             # 跟踪止盈:进入盈利区后记录最低价,自低点反弹 trail_pct 才买回
             trail_hit = False
             if trail_mode:
@@ -344,7 +338,6 @@ class TMonitorEngine:
 
         candidates: list[tuple[str, str, Any, int]] = []  # (side, action, signal, recommended)
         display_signal: Any = None
-        display_side = "long"
         skip_reason: str | None = None
         if direction in {"both", "long"}:
             long_signal = compute_base_position_vwap_t(daily, minute, **thresholds)
@@ -364,7 +357,6 @@ class TMonitorEngine:
             short_signal = compute_base_position_vwap_t_short(daily, minute, **thresholds)
             if display_signal is None or short_signal.score > getattr(display_signal, "score", 0):
                 display_signal = short_signal
-                display_side = "short"
             if short_signal.action == "sell_open":
                 rec = (int(sellable * position_ratio) // 100) * 100  # 卖底仓,不占用现金
                 if rec >= 100:
@@ -381,7 +373,8 @@ class TMonitorEngine:
                 state.current_price = display_signal.current_price
                 state.vwap = display_signal.vwap
                 context = {**display_signal.to_dict(), "position_ratio": position_ratio}
-                context["score_side"] = display_side
+                context["t_scores"] = t_scores
+                context["vwap_gate_pct"] = display_signal.metrics.get("vwap_gate_pct")
                 if skip_reason:
                     context["skip_reason"] = skip_reason
                 state.context = context
@@ -395,7 +388,8 @@ class TMonitorEngine:
         context = signal.to_dict()
         context["position_ratio"] = position_ratio
         context["direction"] = side
-        context["score_side"] = side
+        context["t_scores"] = t_scores
+        context["vwap_gate_pct"] = signal.metrics.get("vwap_gate_pct")
         state.score = signal.score
         state.current_price = signal.current_price
         state.vwap = signal.vwap

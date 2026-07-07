@@ -29,8 +29,8 @@ interface TMonitorState {
     data_quality?: string
     direction?: string
     skip_reason?: string
-    score_detail?: Record<string, boolean>
-    score_side?: string
+    t_scores?: Partial<Record<'long' | 'short', { score: number; detail: Record<string, boolean> }>>
+    vwap_gate_pct?: number | null
   }
 }
 
@@ -221,7 +221,16 @@ export default function TMonitorPanel() {
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mt-3">
                 {[
                   { label: '现价', value: price(row.current_price), cls: 'text-foreground' },
-                  { label: 'VWAP', value: price(row.vwap), cls: 'text-foreground' },
+                  {
+                    // 标签显示 当前偏离/得分门槛,如 "VWAP -0.42/±0.80%":偏离超过 ±门槛 才拿 VWAP 分
+                    label: row.current_price != null && row.vwap != null && row.vwap > 0
+                      ? `VWAP ${row.current_price >= row.vwap ? '+' : ''}${((row.current_price / row.vwap - 1) * 100).toFixed(2)}${
+                          row.context?.vwap_gate_pct ? `/±${(row.context.vwap_gate_pct * 100).toFixed(2)}` : ''
+                        }%`
+                      : 'VWAP',
+                    value: price(row.vwap),
+                    cls: 'text-foreground',
+                  },
                   { label: short ? '压力' : '支撑', value: price(row.support_price), cls: 'text-foreground' },
                   { label: '止损', value: price(row.stop_loss_price), cls: short ? 'text-rose-600' : 'text-emerald-600' },
                   { label: '目标', value: price(row.target_price), cls: short ? 'text-emerald-600' : 'text-rose-600' },
@@ -238,25 +247,36 @@ export default function TMonitorPanel() {
                   </div>
                 </div>
               </div>
-              {row.context?.score_detail && (
-                <div className="mt-2 flex flex-wrap items-center gap-1">
-                  {SCORE_CHECKS.map(check => {
-                    const scoreShort = row.context?.score_side === 'short'
-                    const hit = !!row.context?.score_detail?.[check.key]
+              {row.context?.t_scores && (
+                <div className="mt-2 space-y-1">
+                  {(['long', 'short'] as const).map(side => {
+                    const sideScore = row.context?.t_scores?.[side]
+                    if (!sideScore) return null
+                    const scoreShort = side === 'short'
                     return (
-                      <span
-                        key={check.key}
-                        title={`${check.hint(scoreShort)}(+${check.weight}分)${hit ? '' : ',当前未得分'}`}
-                        className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-tight border ${
-                          hit
-                            ? scoreShort
-                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                              : 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400'
-                            : 'border-border/50 bg-muted/40 text-muted-foreground/60'
-                        }`}
-                      >
-                        {check.label(scoreShort)} +{check.weight}
-                      </span>
+                      <div key={side} className="flex flex-wrap items-center gap-1">
+                        <span className={`inline-flex w-16 shrink-0 items-center text-[10px] font-medium ${scoreShort ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {scoreShort ? '倒T' : '正T'} {Math.round(sideScore.score)}分
+                        </span>
+                        {SCORE_CHECKS.map(check => {
+                          const hit = !!sideScore.detail?.[check.key]
+                          return (
+                            <span
+                              key={check.key}
+                              title={`${check.hint(scoreShort)}(+${check.weight}分)${hit ? '' : ',当前未得分'}`}
+                              className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-tight border ${
+                                hit
+                                  ? scoreShort
+                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                    : 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                                  : 'border-border/50 bg-muted/40 text-muted-foreground/60'
+                              }`}
+                            >
+                              {check.label(scoreShort)} +{check.weight}
+                            </span>
+                          )
+                        })}
+                      </div>
                     )
                   })}
                 </div>
