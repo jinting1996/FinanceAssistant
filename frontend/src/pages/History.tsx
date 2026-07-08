@@ -34,8 +34,8 @@ const AGENT_LABELS: Record<string, string> = {
   tradingagents: 'TradingAgents 深度',
 }
 
-const WORKFLOW_AGENT_KEYS = ['daily_report', 'premarket_outlook', 'intraday_monitor', 'tradingagents']
-const CAPABILITY_AGENT_KEYS = ['news_digest', 'chart_analyst']
+const WORKFLOW_AGENT_KEYS = ['daily_report', 'premarket_outlook', 'intraday_monitor', 'news_digest', 'tradingagents']
+const CAPABILITY_AGENT_KEYS = ['chart_analyst']
 
 export default function HistoryPage() {
   const { toast } = useToast()
