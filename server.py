@@ -207,13 +207,66 @@ class _ConsoleNoiseFilter(logging.Filter):
         return True
 
 
+def _is_playwright_installed(browser_dir: str) -> bool:
+    """检查 Playwright Chromium 是否已安装。"""
+    if not os.path.exists(browser_dir):
+        return False
+    try:
+        dirs = os.listdir(browser_dir)
+        return any(
+            d.startswith("chromium")
+            for d in dirs
+            if os.path.isdir(os.path.join(browser_dir, d))
+        )
+    except Exception:
+        return False
+
+
+def _install_playwright_blocking(browser_dir: str) -> bool:
+    """同步安装 Playwright Chromium（带实时日志输出）。"""
+    os.makedirs(browser_dir, exist_ok=True)
+
+    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir}
+
+    # 国内用户可通过 PLAYWRIGHT_DOWNLOAD_HOST 指定镜像源加速
+    # 例如: PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+    download_host = os.environ.get("PLAYWRIGHT_DOWNLOAD_HOST", "")
+    if download_host:
+        env["PLAYWRIGHT_DOWNLOAD_HOST"] = download_host
+        logger.info(f"使用 Playwright 下载镜像: {download_host}")
+
+    try:
+        # 不用 capture_output，让 stdout/stderr 直接流向日志，用户能看到下载进度
+        result = subprocess.run(
+            ["playwright", "install", "chromium"],
+            env=env,
+            timeout=600,  # 10 分钟超时
+        )
+        if result.returncode == 0:
+            logger.info("Playwright 浏览器安装完成")
+            return True
+        else:
+            logger.error(f"Playwright 安装失败 (exit code {result.returncode})")
+            return False
+    except subprocess.TimeoutExpired:
+        logger.error("Playwright 安装超时（10分钟），K线截图功能暂不可用，下次启动会重试")
+        return False
+    except FileNotFoundError:
+        logger.warning("Playwright 命令不可用，K线截图功能不可用")
+        return False
+    except Exception as e:
+        logger.error(f"Playwright 安装失败: {e}")
+        return False
+
+
 def setup_playwright():
-    """检查并安装 Playwright 浏览器
+    """检查并安装 Playwright 浏览器（非阻塞）。
 
     本地开发时使用系统安装的 Playwright，Docker 环境下安装到 data 目录。
+    安装在后台线程执行，不阻塞服务器启动；安装完成前截图功能暂不可用。
     通过 DOCKER 环境变量或显式设置的 PLAYWRIGHT_BROWSERS_PATH 来判断。
     """
-    import subprocess
+    import threading
 
     # 允许通过环境变量跳过首次安装（例如不需要截图功能时）
     if os.environ.get("PLAYWRIGHT_SKIP_BROWSER_INSTALL") == "1":
@@ -237,42 +290,23 @@ def setup_playwright():
         logger.info("本地开发环境，使用系统 Playwright")
         return
 
-    # 检查是否已安装
-    if os.path.exists(browser_dir):
-        try:
-            dirs = os.listdir(browser_dir)
-            if any(
-                d.startswith("chromium")
-                for d in dirs
-                if os.path.isdir(os.path.join(browser_dir, d))
-            ):
-                logger.info(f"Playwright 浏览器已就绪: {browser_dir}")
-                return
-        except Exception:
-            pass
+    # 已安装则直接返回
+    if _is_playwright_installed(browser_dir):
+        logger.info(f"Playwright 浏览器已就绪: {browser_dir}")
+        return
 
-    # 首次安装
-    logger.info("首次启动，正在安装 Playwright 浏览器（可能需要几分钟）...")
-    os.makedirs(browser_dir, exist_ok=True)
-
-    try:
-        result = subprocess.run(
-            ["playwright", "install", "chromium"],
-            env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir},
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 分钟超时
-        )
-        if result.returncode == 0:
-            logger.info("Playwright 浏览器安装完成")
+    # 后台线程安装，不阻塞服务器启动
+    def _bg_install():
+        logger.info("后台安装 Playwright 浏览器中（不影响服务器启动，截图功能安装完成后可用）...")
+        success = _install_playwright_blocking(browser_dir)
+        if success:
+            logger.info("Playwright 后台安装完成，K线截图功能现已可用")
         else:
-            logger.error(f"Playwright 安装失败: {result.stderr}")
-    except subprocess.TimeoutExpired:
-        logger.error("Playwright 安装超时（网络问题？）")
-    except FileNotFoundError:
-        logger.warning("Playwright 命令不可用，K线截图功能不可用")
-    except Exception as e:
-        logger.error(f"Playwright 安装失败: {e}")
+            logger.warning("Playwright 安装未成功，K线截图功能暂不可用，下次启动会自动重试")
+
+    thread = threading.Thread(target=_bg_install, daemon=True, name="playwright-install")
+    thread.start()
+    logger.info("Playwright 安装已在后台启动，服务器继续启动中...")
 
 
 def seed_sample_stocks():
