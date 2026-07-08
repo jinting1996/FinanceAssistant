@@ -30,6 +30,7 @@ from src.web.api import (
     chat,
     market_events,
     market_feed,
+    market_mood,
     screener,
     strategy_analysis,
     system,
@@ -214,6 +215,12 @@ app.include_router(
     t_monitor.router,
     prefix="/api/t-monitor",
     tags=["t-monitor"],
+    dependencies=protected,
+)
+app.include_router(
+    market_mood.router,
+    prefix="/api/market-mood",
+    tags=["market-mood"],
     dependencies=protected,
 )
 app.include_router(

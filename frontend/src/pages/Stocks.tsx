@@ -19,6 +19,7 @@ import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
 import TMonitorPanel from '@/components/TMonitorPanel'
+import MarketMoodCards from '@/components/MarketMoodCards'
 
 interface AgentResult {
   success?: boolean
@@ -1655,9 +1656,7 @@ export default function StocksPage() {
           {(() => {
             const ratioPct = positionRatio?.pct ?? 0
             const avail = portfolio.total.available_funds || 0
-            const highRisk = ratioPct >= 90
             const isFull = ratioPct >= 99 || avail <= 0
-            const pnlUp = portfolio.total.total_pnl >= 0
             return (
               <>
                 {isFull && (
@@ -1667,38 +1666,8 @@ export default function StocksPage() {
                   </div>
                 )}
 
-                {/* L1 主卡：总盈亏 / 仓位占比 */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  <div className="card p-4">
-                    <div className="flex items-center gap-1.5 text-muted-foreground mb-1.5">
-                      {pnlUp ? <ArrowUpRight className="w-4 h-4 text-rose-500" /> : <ArrowDownRight className="w-4 h-4 text-emerald-500" />}
-                      <span className="text-[12px]">总盈亏</span>
-                    </div>
-                    <div className={`text-[26px] leading-none font-bold font-mono ${pnlUp ? 'text-rose-500' : 'text-emerald-500'}`}>
-                      {pnlUp ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
-                      <span className="text-[14px] ml-2">({portfolio.total.total_pnl_pct >= 0 ? '+' : ''}{portfolio.total.total_pnl_pct.toFixed(2)}%)</span>
-                    </div>
-                  </div>
-
-                  <div className={`card p-4 ${highRisk ? 'border-rose-500/40 bg-rose-500/5' : ''}`}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-1.5 text-muted-foreground">
-                        <Bell className={`w-4 h-4 ${highRisk ? 'text-rose-500' : ''}`} />
-                        <span className="text-[12px]">仓位占比</span>
-                      </div>
-                      {highRisk && <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 font-medium">高仓位</span>}
-                    </div>
-                    <div className={`text-[26px] leading-none font-bold font-mono ${highRisk ? 'text-rose-500' : 'text-foreground'}`}>
-                      {positionRatio ? `${ratioPct.toFixed(1)}%` : '--'}
-                    </div>
-                    <div className="mt-2 h-1.5 rounded-full bg-accent/50 overflow-hidden">
-                      <div className={`h-full rounded-full ${highRisk ? 'bg-rose-500' : 'bg-primary'}`} style={{ width: `${Math.min(100, Math.max(0, ratioPct))}%` }} />
-                    </div>
-                    <div className="mt-1 text-[10px] text-muted-foreground line-clamp-1">
-                      {positionRatio ? `持仓 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
-                    </div>
-                  </div>
-                </div>
+                {/* L1 主卡：大盘情绪 / 板块资金流 */}
+                <MarketMoodCards />
 
                 {/* L2 次卡：今日盈亏 / 总市值 / 可用资金 / 总资产 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
