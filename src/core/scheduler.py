@@ -54,6 +54,8 @@ class AgentScheduler:
             id=agent.name,
             name=agent.display_name,
             replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True,
         )
 
         logger.info(f"注册 Agent: {agent.display_name} (schedule: {schedule})")

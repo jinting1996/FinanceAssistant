@@ -326,6 +326,8 @@ def seed_agents():
             # 同步 display_name 和 description
             existing.display_name = spec.display_name or existing.display_name
             existing.description = spec.description or existing.description
+            # 检测 kind 变化（用于迁移：如 news_digest 从 capability 升级为 workflow）
+            kind_changed = existing.kind != spec.kind
             existing.kind = spec.kind
             existing.visible = bool(spec.visible)
             existing.lifecycle_status = spec.lifecycle_status or "active"
@@ -336,6 +338,15 @@ def seed_agents():
             if spec.kind != AGENT_KIND_WORKFLOW:
                 existing.enabled = False
                 existing.schedule = ""
+            else:
+                # WORKFLOW agent：
+                # kind 从 capability 迁移过来时（如 news_digest），同步 enabled 和 schedule
+                if kind_changed:
+                    existing.enabled = spec.enabled
+                    existing.schedule = spec.schedule
+                # schedule 为空时从 seed 补齐（避免升级后丢失默认调度）
+                elif not existing.schedule:
+                    existing.schedule = spec.schedule
 
             # 仅在用户未配置时补齐默认 config
             if spec.config and (not existing.config):

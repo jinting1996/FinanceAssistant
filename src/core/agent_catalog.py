@@ -16,10 +16,10 @@ WORKFLOW_AGENT_NAMES: tuple[str, ...] = (
     "premarket_outlook",
     "intraday_monitor",
     "daily_report",
+    "news_digest",
 )
 
 CAPABILITY_AGENT_NAMES: tuple[str, ...] = (
-    "news_digest",
     "chart_analyst",
 )
 
@@ -60,7 +60,7 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
         name="premarket_outlook",
         display_name="盘前分析",
         description="开盘前综合昨日分析和隔夜信息，展望今日走势",
-        enabled=False,
+        enabled=True,
         schedule="0 9 * * 1-5",
         execution_mode="batch",
         kind=AGENT_KIND_WORKFLOW,
@@ -71,7 +71,7 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
         name="intraday_monitor",
         display_name="盘中监测",
         description="交易时段实时监控，AI 智能判断是否有值得关注的信号",
-        enabled=False,
+        enabled=True,
         schedule="*/5 9-15 * * 1-5",
         execution_mode="single",
         kind=AGENT_KIND_WORKFLOW,
@@ -99,15 +99,15 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
     ),
     AgentSeedSpec(
         name="news_digest",
-        display_name="新闻速递（能力）",
-        description="内部能力：提供新闻抓取、去重与主题聚合，不独立调度",
-        enabled=False,
-        schedule="",
+        display_name="新闻速递",
+        description="定时抓取与持仓相关的财经新闻，AI 筛选重要信息并推送摘要",
+        enabled=True,
+        schedule="0 8,12,18 * * 1-5",
         execution_mode="batch",
-        kind=AGENT_KIND_CAPABILITY,
-        visible=False,
-        lifecycle_status="deprecated",
-        replaced_by="premarket_outlook,daily_report,intraday_monitor",
+        kind=AGENT_KIND_WORKFLOW,
+        visible=True,
+        lifecycle_status="active",
+        replaced_by="",
         display_order=110,
         config={
             "since_hours": 12,
