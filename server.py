@@ -1,4 +1,4 @@
-"""FinanceAssistant 统一服务入口 - Web 后台 + Agent 调度"""
+"""PanWatch 统一服务入口 - Web 后台 + Agent 调度"""
 
 import logging
 import os
@@ -28,6 +28,7 @@ from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.context_scheduler import ContextMaintenanceScheduler
 from src.core.t_monitor_scheduler import TMonitorScheduler
+from src.core.breakout_validity_scheduler import BreakoutValidityScheduler
 from src.core.agent_runs import record_agent_run
 from src.core.log_context import install_log_record_factory, log_context
 from src.core.agent_catalog import (
@@ -51,6 +52,7 @@ price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 t_monitor_scheduler: TMonitorScheduler | None = None
+breakout_validity_scheduler: BreakoutValidityScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -154,7 +156,7 @@ def setup_logging():
 
     # reload/server restart 时避免重复 handler 导致日志放大。
     for h in list(root.handlers):
-        if isinstance(h, DBLogHandler) or getattr(h, "_financeassistant_console", False):
+        if isinstance(h, DBLogHandler) or getattr(h, "_panwatch_console", False):
             root.removeHandler(h)
             try:
                 h.close()
@@ -163,7 +165,7 @@ def setup_logging():
 
     # 控制台输出: 按 LOG_LEVEL 过滤,且丢弃三方库的低级别噪音
     console = logging.StreamHandler()
-    console._financeassistant_console = True  # type: ignore[attr-defined]
+    console._panwatch_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
     console.addFilter(_ConsoleNoiseFilter())
     console.setFormatter(
@@ -207,66 +209,13 @@ class _ConsoleNoiseFilter(logging.Filter):
         return True
 
 
-def _is_playwright_installed(browser_dir: str) -> bool:
-    """检查 Playwright Chromium 是否已安装。"""
-    if not os.path.exists(browser_dir):
-        return False
-    try:
-        dirs = os.listdir(browser_dir)
-        return any(
-            d.startswith("chromium")
-            for d in dirs
-            if os.path.isdir(os.path.join(browser_dir, d))
-        )
-    except Exception:
-        return False
-
-
-def _install_playwright_blocking(browser_dir: str) -> bool:
-    """同步安装 Playwright Chromium（带实时日志输出）。"""
-    os.makedirs(browser_dir, exist_ok=True)
-
-    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir}
-
-    # 国内用户可通过 PLAYWRIGHT_DOWNLOAD_HOST 指定镜像源加速
-    # 例如: PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
-    download_host = os.environ.get("PLAYWRIGHT_DOWNLOAD_HOST", "")
-    if download_host:
-        env["PLAYWRIGHT_DOWNLOAD_HOST"] = download_host
-        logger.info(f"使用 Playwright 下载镜像: {download_host}")
-
-    try:
-        # 不用 capture_output，让 stdout/stderr 直接流向日志，用户能看到下载进度
-        result = subprocess.run(
-            ["playwright", "install", "chromium"],
-            env=env,
-            timeout=600,  # 10 分钟超时
-        )
-        if result.returncode == 0:
-            logger.info("Playwright 浏览器安装完成")
-            return True
-        else:
-            logger.error(f"Playwright 安装失败 (exit code {result.returncode})")
-            return False
-    except subprocess.TimeoutExpired:
-        logger.error("Playwright 安装超时（10分钟），K线截图功能暂不可用，下次启动会重试")
-        return False
-    except FileNotFoundError:
-        logger.warning("Playwright 命令不可用，K线截图功能不可用")
-        return False
-    except Exception as e:
-        logger.error(f"Playwright 安装失败: {e}")
-        return False
-
-
 def setup_playwright():
-    """检查并安装 Playwright 浏览器（非阻塞）。
+    """检查并安装 Playwright 浏览器
 
     本地开发时使用系统安装的 Playwright，Docker 环境下安装到 data 目录。
-    安装在后台线程执行，不阻塞服务器启动；安装完成前截图功能暂不可用。
     通过 DOCKER 环境变量或显式设置的 PLAYWRIGHT_BROWSERS_PATH 来判断。
     """
-    import threading
+    import subprocess
 
     # 允许通过环境变量跳过首次安装（例如不需要截图功能时）
     if os.environ.get("PLAYWRIGHT_SKIP_BROWSER_INSTALL") == "1":
@@ -290,23 +239,42 @@ def setup_playwright():
         logger.info("本地开发环境，使用系统 Playwright")
         return
 
-    # 已安装则直接返回
-    if _is_playwright_installed(browser_dir):
-        logger.info(f"Playwright 浏览器已就绪: {browser_dir}")
-        return
+    # 检查是否已安装
+    if os.path.exists(browser_dir):
+        try:
+            dirs = os.listdir(browser_dir)
+            if any(
+                d.startswith("chromium")
+                for d in dirs
+                if os.path.isdir(os.path.join(browser_dir, d))
+            ):
+                logger.info(f"Playwright 浏览器已就绪: {browser_dir}")
+                return
+        except Exception:
+            pass
 
-    # 后台线程安装，不阻塞服务器启动
-    def _bg_install():
-        logger.info("后台安装 Playwright 浏览器中（不影响服务器启动，截图功能安装完成后可用）...")
-        success = _install_playwright_blocking(browser_dir)
-        if success:
-            logger.info("Playwright 后台安装完成，K线截图功能现已可用")
+    # 首次安装
+    logger.info("首次启动，正在安装 Playwright 浏览器（可能需要几分钟）...")
+    os.makedirs(browser_dir, exist_ok=True)
+
+    try:
+        result = subprocess.run(
+            ["playwright", "install", "chromium"],
+            env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir},
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 分钟超时
+        )
+        if result.returncode == 0:
+            logger.info("Playwright 浏览器安装完成")
         else:
-            logger.warning("Playwright 安装未成功，K线截图功能暂不可用，下次启动会自动重试")
-
-    thread = threading.Thread(target=_bg_install, daemon=True, name="playwright-install")
-    thread.start()
-    logger.info("Playwright 安装已在后台启动，服务器继续启动中...")
+            logger.error(f"Playwright 安装失败: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        logger.error("Playwright 安装超时（网络问题？）")
+    except FileNotFoundError:
+        logger.warning("Playwright 命令不可用，K线截图功能不可用")
+    except Exception as e:
+        logger.error(f"Playwright 安装失败: {e}")
 
 
 def seed_sample_stocks():
@@ -360,8 +328,6 @@ def seed_agents():
             # 同步 display_name 和 description
             existing.display_name = spec.display_name or existing.display_name
             existing.description = spec.description or existing.description
-            # 检测 kind 变化（用于迁移：如 news_digest 从 capability 升级为 workflow）
-            kind_changed = existing.kind != spec.kind
             existing.kind = spec.kind
             existing.visible = bool(spec.visible)
             existing.lifecycle_status = spec.lifecycle_status or "active"
@@ -372,15 +338,6 @@ def seed_agents():
             if spec.kind != AGENT_KIND_WORKFLOW:
                 existing.enabled = False
                 existing.schedule = ""
-            else:
-                # WORKFLOW agent：
-                # kind 从 capability 迁移过来时（如 news_digest），同步 enabled 和 schedule
-                if kind_changed:
-                    existing.enabled = spec.enabled
-                    existing.schedule = spec.schedule
-                # schedule 为空时从 seed 补齐（避免升级后丢失默认调度）
-                elif not existing.schedule:
-                    existing.schedule = spec.schedule
 
             # 仅在用户未配置时补齐默认 config
             if spec.config and (not existing.config):
@@ -1331,7 +1288,7 @@ async def lifespan(app):
 
     threading.Thread(target=refresh_stock_cache, daemon=True).start()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, t_monitor_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, t_monitor_scheduler, breakout_validity_scheduler
     scheduler = build_scheduler()
     scheduler.start()
     logger.info("Agent 调度器已启动")
@@ -1355,6 +1312,13 @@ async def lifespan(app):
         logger.info("底仓做T盯盘调度器已启动")
     except Exception as e:
         logger.error(f"底仓做T盯盘调度器启动失败: {e}")
+    try:
+        settings = Settings()
+        breakout_validity_scheduler = BreakoutValidityScheduler(timezone=settings.app_timezone)
+        breakout_validity_scheduler.start()
+        logger.info("突破有效性扫描调度器已启动(每交易日15:20)")
+    except Exception as e:
+        logger.error(f"突破有效性扫描调度器启动失败: {e}")
     try:
         settings = Settings()
         paper_trading_scheduler = PaperTradingScheduler(
@@ -1387,6 +1351,9 @@ async def lifespan(app):
     if t_monitor_scheduler:
         t_monitor_scheduler.shutdown()
         logger.info("底仓做T盯盘调度器已关闭")
+    if breakout_validity_scheduler:
+        breakout_validity_scheduler.shutdown()
+        logger.info("突破有效性扫描调度器已关闭")
     if paper_trading_scheduler:
         paper_trading_scheduler.shutdown()
         logger.info("模拟盘调度器已关闭")

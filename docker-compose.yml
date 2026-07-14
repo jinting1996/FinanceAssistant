@@ -23,7 +23,8 @@ services:
     container_name: financeassistant
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # 宿主机端口可用 PANWATCH_PORT 覆盖(如 PANWATCH_PORT=18123 docker compose up -d)
+      - "${PANWATCH_PORT:-8000}:8000"
     # 从 .env 读取 AI/通知/登录等配置（文件不存在时可删掉这一段）
     env_file:
       - .env

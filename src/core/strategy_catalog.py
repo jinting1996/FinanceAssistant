@@ -122,6 +122,25 @@ DEFAULT_STRATEGIES: tuple[StrategySpec, ...] = (
         params={"horizon_days": 3},
         default_weight=1.08,
     ),
+    StrategySpec(
+        code="breakout_validity",
+        name="突破有效性",
+        description="上升趋势突破前高有效性(v3.0):60日前高突破+四路径确认,valid_active买入,失效强平",
+        risk_level="medium",
+        params={
+            "lookback": 60,
+            "min_high_age": 5,
+            "max_observe": 5,
+            "breakout_buffer": 1.005,
+            "confirm_days": 3,
+            "support_ratio": 0.97,
+            "vol_up_ratio": 1.3,
+            "vol_down_ratio": 0.8,
+            "ext_g0": 1.15,
+            "horizon_days": 10,
+        },
+        default_weight=1.10,
+    ),
 )
 
 

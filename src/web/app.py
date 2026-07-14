@@ -28,6 +28,7 @@ from src.web.api import (
     dashboard,
     paper_trading,
     chat,
+    breakout,
     market_events,
     market_feed,
     market_mood,
@@ -221,6 +222,12 @@ app.include_router(
     market_mood.router,
     prefix="/api/market-mood",
     tags=["market-mood"],
+    dependencies=protected,
+)
+app.include_router(
+    breakout.router,
+    prefix="/api/breakout",
+    tags=["breakout"],
     dependencies=protected,
 )
 app.include_router(
