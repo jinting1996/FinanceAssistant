@@ -1,10 +1,11 @@
 # 盯盘侠 FinanceAssistant
 
-自托管 AI 盯盘助手，覆盖 A 股 / 港股 / 美股，集成 TradingAgents 多 Agent 投资决策、事件日历、板块轮动、X 舆论监控与全渠道推送。
+自托管 AI 盯盘助手，覆盖 A 股 / 港股 / 美股实时监控，集成 TradingAgents 多 Agent 投资决策、事件日历、板块轮动、X 舆情监控与全渠道推送。Fork 自 [PotatoChipking/FinanceAssistant](https://github.com/PotatoChipking/FinanceAssistant)，在上游基础上增加了 Docker Hub 预构建镜像、X 舆情监控、CI/CD 自动构建与上游自动同步。
 
-[![GitHub stars](https://img.shields.io/github/stars/PotatoChipking/finance?style=flat&logo=github&color=yellow)](https://github.com/PotatoChipking/finance/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/jinting1996/FinanceAssistant?style=flat&logo=github&color=yellow)](https://github.com/jinting1996/FinanceAssistant/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-wwkisu%2Ffinanceassistant-blue?logo=docker)](https://hub.docker.com/r/wwkisu/financeassistant)
+[![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-green?logo=githubactions)](https://github.com/jinting1996/FinanceAssistant/actions)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -21,7 +22,7 @@
 <img src="./docs/screenshots/mobile.png" width="375" />
 </details>
 
-> 如果盯盘侠对你有帮助，点右上角 Star 支持一下 —— 这是对开源项目最好的鼓励。
+> 如果盯盘侠对你有帮助，点右上角 Star 支持一下。
 
 ## 目录
 
@@ -38,10 +39,10 @@
 ## 为什么选择盯盘侠
 
 - **数据私有** — 自托管部署，持仓数据不经过任何第三方
-- **AI 原生** — 不是简单的指标堆砌，而是让 AI 理解你的持仓、风格和目标，输出可执行的建议
-- **事件驱动** — 重大消息、板块日 K、MACD/RSI 和资金轮动放在同一个页面判断，减少信息跳转
+- **AI 原生** — 让 AI 理解你的持仓、风格和目标，输出有依据的建议，而非简单堆砌指标
+- **事件驱动** — 重大消息、板块日 K、MACD/RSI 和资金轮动放在同一页面，减少信息跳转
 - **开箱即用** — 本地一键启动，5 分钟完成配置；Docker 一条命令拉起
-- **个人维护** — 本仓库 Fork 自 [PotatoChipking/FinanceAssistant](https://github.com/PotatoChipking/FinanceAssistant)，在上游基础上增加了 Docker Hub 镜像、X 舆论监控、CI/CD 自动构建等功能
+- **自动同步** — Fork 仓库每 6 小时自动同步上游更新，同步后自动构建最新 Docker 镜像
 
 ## 核心能力
 
@@ -56,9 +57,9 @@
 
 ### TradingAgents 深度分析
 
-接入 [TradingAgents](https://github.com/TauricResearch/TradingAgents)（76k+ star）多 Agent 投资决策框架。在持仓页或事件日历的板块龙头股上点 🧠 图标即可触发，3-5 分钟输出完整推理链：
+接入 [TradingAgents](https://github.com/TauricResearch/TradingAgents)（76k+ star）多 Agent 投资决策框架。在持仓页或事件日历的板块龙头股上点 brain 图标即可触发，3-5 分钟输出完整推理链：
 
-分析师团队（技术面 / 情绪面 / 新闻面 / 基本面）→ 多空辩论 → 风控审查 → PM 整合决策
+分析师团队（技术面 / 情绪面 / 新闻面 / 基本面） → 多空辩论 → 风控审查 → PM 整合决策
 
 结论同步推送到 Telegram / 企业微信 / 钉钉 / 飞书。支持未加入自选池的板块龙头股临时分析，适合从事件和板块轮动里快速下钻。默认 deepseek-chat，单次约 $0.05。
 
@@ -104,9 +105,11 @@ GET /api/klines/{symbol}/price-action?market=CN&days=180
 
 支持价格、涨跌幅、成交额、量比、PA 评分/突破/回踩/结构失效等条件组合（AND / OR）。支持交易时段/全天生效、冷却时间、日触发上限、重复触发模式，到期时间留空表示永不过期。可按规则选择通知渠道，不选则走系统默认渠道。
 
-### X 舆论监控
+### X 舆情监控
 
-基于 `twikit` 免费抓取 X (Twitter) 上的 Cashtag（`$SYMBOL`）讨论，通过 AI 进行正面/负面/中性情感分类。分析结果汇总为结构化舆情数据，可作为 Agent 的补充数据源。内置速率限制（50 次/15 分钟）和 Cookie 持久化会话恢复。需要配置 X 账号（建议使用小号），在 `.env` 中设置 `X_USERNAME` / `X_EMAIL` / `X_PASSWORD` 即可启用。
+基于 `twikit` 免费抓取 X (Twitter) 上的 Cashtag（`$SYMBOL`）讨论，通过 AI 进行正面/负面/中性情感分类。分析结果汇总为结构化舆情数据，可作为 Agent 的补充数据源。内置速率限制（50 次/15 分钟）和 Cookie 持久化会话恢复。
+
+需要配置 X 账号（建议使用小号），在 `.env` 中设置 `X_USERNAME` / `X_EMAIL` / `X_PASSWORD` 即可启用。
 
 ### 多市场多账户
 
@@ -132,8 +135,8 @@ Telegram / 企业微信 / 钉钉 / 飞书 / Bark / 自定义 Webhook，支持按
 ## 快速开始
 
 ```bash
-git clone https://github.com/PotatoChipking/finance.git
-cd finance
+git clone https://github.com/jinting1996/FinanceAssistant.git
+cd FinanceAssistant
 make dev-api        # 启动后端（自动 venv + 依赖，监听 :8000）
 make dev-web        # 启动前端（自动 pnpm install，监听 :5183）
 ```
@@ -147,8 +150,8 @@ make dev-web        # 启动前端（自动 pnpm install，监听 :5183）
 仓库自带的 `docker-compose.yml` 从当前源码构建镜像，不依赖任何外部镜像：
 
 ```bash
-git clone https://github.com/PotatoChipking/finance.git
-cd finance
+git clone https://github.com/jinting1996/FinanceAssistant.git
+cd FinanceAssistant
 cp .env.example .env            # 按需填写 AI_API_KEY 等
 docker compose up -d --build    # 构建镜像并后台启动
 ```
@@ -161,7 +164,7 @@ git pull && docker compose up -d --build   # 升级：拉代码后重建
 docker compose down                        # 停止
 ```
 
-### 从 Docker Hub 拉取预构建镜像
+### 拉取预构建镜像
 
 CI/CD 自动构建并推送到两个 Registry，适合国内网络环境或 NAS 设备直接拉取：
 
@@ -173,7 +176,7 @@ docker pull wwkisu/financeassistant:latest
 docker pull ghcr.io/jinting1996/financeassistant:latest
 ```
 
-镜像标签：`latest` / `main` / `sha-<短哈希>`，每次 push 到 main 或每日凌晨 2:00 自动构建。
+镜像标签：`latest` / `main` / `sha-<短哈希>`。每次 push 到 main 分支或上游同步后自动构建。
 
 ### NAS 部署
 
@@ -199,9 +202,9 @@ docker pull ghcr.io/jinting1996/financeassistant:latest
 | `PLAYWRIGHT_SKIP_BROWSER_INSTALL` | 跳过 Chromium 安装（不需要截图时） | 未设置 |
 | `UPDATE_CHECK_DOCKER_REPO` | 升级检测的镜像仓库，留空不检测 | 未设置 |
 | `LOG_LEVEL` | 控制台日志级别（`INFO` / `DEBUG`） | `INFO` |
-| `X_USERNAME` | X 账号用户名（舆论监控） | 空 |
-| `X_EMAIL` | X 账号邮箱（舆论监控） | 空 |
-| `X_PASSWORD` | X 账号密码（舆论监控） | 空 |
+| `X_USERNAME` | X 账号用户名（舆情监控） | 空 |
+| `X_EMAIL` | X 账号邮箱（舆情监控） | 空 |
+| `X_PASSWORD` | X 账号密码（舆情监控） | 空 |
 | `SOCIAL_SENTIMENT_ENABLED` | 启用 AI 情感分析 | `false` |
 
 支持 OpenAI / 智谱 / DeepSeek / Ollama 等所有 OpenAI 兼容 API。
@@ -273,11 +276,11 @@ cd frontend && pnpm install && pnpm dev
 
 后端推荐通过 `python server.py` 启动，它会初始化数据库迁移、认证、日志、调度器等全部运行时服务。直接用 `uvicorn src.web.app:app` 启动也受支持，因为 `src.web.app` 会委托到相同的生命周期初始化路径，两种入口的迁移、认证、调度器行为一致。
 
-上游仓库地址：`https://github.com/PotatoChipking/finance.git`
+上游仓库地址：`https://github.com/PotatoChipking/FinanceAssistant.git`
 
 ## 贡献
 
-本仓库由 [PotatoChipking](https://github.com/PotatoChipking) 维护。自定义 Agent 和数据源开发请参考[贡献指南](CONTRIBUTING.md)。
+本 Fork 由 [jinting1996](https://github.com/jinting1996) 维护，上游原项目由 [PotatoChipking](https://github.com/PotatoChipking) 维护。自定义 Agent 和数据源开发请参考[贡献指南](CONTRIBUTING.md)。
 
 ## License
 
