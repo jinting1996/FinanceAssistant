@@ -70,5 +70,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Upstream changes synced. Triggering Docker image build..."
-          gh workflow run docker-build.yml --ref main || echo "Could not trigger docker-build (may already be running)."
+          gh workflow run docker-build.yml --repo "${{ github.repository }}" --ref main || echo "Could not trigger docker-build (may already be running)."
           echo "Done."
