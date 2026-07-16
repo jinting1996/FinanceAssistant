@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3, Brain, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3, Brain, AlertTriangle, ClipboardList } from 'lucide-react'
 import { fetchAPI, recommendationsApi, stocksApi, type AIService, type NotifyChannel, type TradeRulesConfig } from '@panwatch/api'
 import { useLocalStorage } from '@/lib/utils'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@panwatch/biz-ui/components/suggestion-badge'
@@ -19,6 +19,7 @@ import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
 import TMonitorPanel from '@/components/TMonitorPanel'
+import DailyReviewDialog from '@/components/DailyReviewDialog'
 import MarketMoodCards from '@/components/MarketMoodCards'
 
 interface AgentResult {
@@ -348,6 +349,7 @@ export default function StocksPage() {
   const [portfolioRaw, setPortfolioRaw] = useState<PortfolioSummary | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set())
+  const [showReviewDialog, setShowReviewDialog] = useState(false)
 
   // Quotes for all stocks (used in stock list)
   const [quotes, setQuotes] = useState<Record<string, { current_price: number | null; change_pct: number | null }>>({})
@@ -1559,6 +1561,9 @@ export default function StocksPage() {
             <Button variant="secondary" onClick={scanAndReload} disabled={scanning}>
               <Bot className="w-4 h-4" /> 扫描
             </Button>
+            <Button variant="secondary" onClick={() => setShowReviewDialog(true)}>
+              <ClipboardList className="w-4 h-4" /> 复盘
+            </Button>
             <Button variant="secondary" onClick={() => openAccountDialog()}>
               <Building2 className="w-4 h-4" /> 添加账户
             </Button>
@@ -1573,6 +1578,9 @@ export default function StocksPage() {
             </Button>
             <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={scanAndReload} disabled={scanning}>
               <Bot className="w-4 h-4" />
+            </Button>
+            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => setShowReviewDialog(true)}>
+              <ClipboardList className="w-4 h-4" />
             </Button>
             <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => openAccountDialog()}>
               <Building2 className="w-4 h-4" />
@@ -3174,6 +3182,13 @@ export default function StocksPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 每日复盘弹窗 */}
+      <DailyReviewDialog
+        open={showReviewDialog}
+        onOpenChange={setShowReviewDialog}
+        accounts={accounts.map(a => ({ id: a.id, name: a.name }))}
+      />
     </div>
   )
 }

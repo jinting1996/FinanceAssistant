@@ -38,7 +38,8 @@ from src.web.api import (
     tasks,
     backtests,
     t_monitor,
-    social,
+    trades,
+    review,
 )
 from src.web.api import insights
 from src.web.api.auth import get_current_user
@@ -243,9 +244,15 @@ app.include_router(
     dependencies=protected,
 )
 app.include_router(
-    social.router,
-    prefix="/api/social",
-    tags=["social"],
+    trades.router,
+    prefix="/api/trades",
+    tags=["trades"],
+    dependencies=protected,
+)
+app.include_router(
+    review.router,
+    prefix="/api/review",
+    tags=["review"],
     dependencies=protected,
 )
 

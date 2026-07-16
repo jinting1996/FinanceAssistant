@@ -132,6 +132,31 @@ class Position(Base):
     stock = relationship("Stock", back_populates="positions")
 
 
+class TradeRecord(Base):
+    """真实账户成交流水（手动录入，用于每日复盘）。"""
+
+    __tablename__ = "trade_records"
+    __table_args__ = (
+        Index("ix_trade_records_traded_at", "traded_at"),
+        Index("ix_trade_records_symbol", "symbol", "market"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    name = Column(String, default="")
+    direction = Column(String, nullable=False)  # buy / sell
+    price = Column(Float, nullable=False)  # 成交价（原币种）
+    quantity = Column(Integer, nullable=False)
+    amount = Column(Float, nullable=False, default=0.0)  # 成交金额（原币种）
+    traded_at = Column(DateTime, nullable=False)
+    note = Column(String, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class TMonitorState(Base):
     """底仓做 T 策略的日内状态机。"""
 
