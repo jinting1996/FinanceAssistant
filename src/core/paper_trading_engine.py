@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -156,6 +156,8 @@ def _persist_skip_stats(db: Session, skip_events: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 ALL_MARKETS: tuple[str, ...] = ("CN", "HK", "US")
+# 信号最大有效天数:snapshot_date 早于该窗口的 active 信号不再触发建仓/进入盘前计划
+SIGNAL_MAX_AGE_DAYS = 5
 DEFAULT_ALLOCATIONS: dict[str, float] = {"CN": 0.5, "HK": 0.3, "US": 0.2}
 
 
@@ -330,7 +332,9 @@ class PaperTradingEngine:
     ) -> tuple[int, set[tuple[str, str]], list[tuple[PaperTradingPosition, StrategySignalRun | None]], list[dict]]:
         """检查可入场的策略信号，自动建仓。返回 (建仓数, 新建仓股票key集合, 建仓事件列表, 跳过事件)。"""
         skip_events: list[dict] = []
-        # 查询最新活跃买入信号
+        # 查询最新活跃买入信号(超过 SIGNAL_MAX_AGE_DAYS 的陈旧信号不再触发建仓,
+        # 避免生成方未及时置 inactive 时按过时的入场区间开仓)
+        fresh_after = (_utc_now() - timedelta(days=SIGNAL_MAX_AGE_DAYS)).strftime("%Y-%m-%d")
         query = (
             db.query(StrategySignalRun)
             .filter(
@@ -338,9 +342,15 @@ class PaperTradingEngine:
                 StrategySignalRun.action.in_(["buy", "add"]),
                 StrategySignalRun.entry_low.isnot(None),
                 StrategySignalRun.entry_high.isnot(None),
+                StrategySignalRun.snapshot_date >= fresh_after,
             )
         )
         selected_codes = resolve_enabled_strategy_codes_for_paper(db)
+        # 先在 SQL 层按已选策略过滤,避免未选策略的高分信号挤占 limit 名额
+        if selected_codes is not None:
+            if not selected_codes:
+                return 0, set(), [], skip_events
+            query = query.filter(StrategySignalRun.strategy_code.in_(selected_codes))
         # 按投资比例排除不投入（比例为 0）的市场
         alloc = market_allocations_or_default(account)
         excluded = [m for m in ALL_MARKETS if alloc.get(m, 0.0) <= 0]

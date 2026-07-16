@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.core.notifier import NotifierManager
@@ -191,18 +192,17 @@ def _format_exit_message(pos: dict, trade: dict) -> tuple[str, str]:
 
 def _dedup_signals(signals: list[StrategySignalRun]) -> list[tuple[StrategySignalRun, int]]:
     """按 (stock_symbol, stock_market) 去重，保留 rank_score 最高的信号。
-    返回 [(signal, strategy_count), ...]，已按 rank_score desc 排序。
+    返回 [(signal, strategy_count), ...],strategy_count 为去重后的策略数(非信号行数)。
     """
-    seen: dict[tuple[str, str], tuple[StrategySignalRun, int]] = {}
+    seen: dict[tuple[str, str], StrategySignalRun] = {}
+    codes: dict[tuple[str, str], set[str]] = {}
     for sig in signals:
         key = (sig.stock_symbol, sig.stock_market)
         if key not in seen:
-            seen[key] = (sig, 1)
-        else:
-            _, count = seen[key]
-            seen[key] = (seen[key][0], count + 1)
+            seen[key] = sig
+        codes.setdefault(key, set()).add(str(sig.strategy_code or ""))
     # 已按 rank_score desc 查询，保留首次出现的顺序即可
-    return list(seen.values())
+    return [(sig, len(codes[key])) for key, sig in seen.items()]
 
 
 def _format_premarket_plan(signals: list[StrategySignalRun], account: PaperTradingAccount) -> tuple[str, str]:
@@ -320,9 +320,16 @@ async def send_premarket_plan() -> None:
                 return
 
             # 按投资比例排除不投入（比例为 0）的市场
-            from src.core.paper_trading_engine import ALL_MARKETS, market_allocations_or_default
+            from src.core.paper_trading_engine import (
+                ALL_MARKETS,
+                SIGNAL_MAX_AGE_DAYS,
+                market_allocations_or_default,
+            )
+            from src.core.strategy_pool import resolve_enabled_strategy_codes_for_paper
+
             alloc = market_allocations_or_default(account)
             excluded = [m for m in ALL_MARKETS if alloc.get(m, 0.0) <= 0]
+            fresh_after = (datetime.now() - timedelta(days=SIGNAL_MAX_AGE_DAYS)).strftime("%Y-%m-%d")
             query = (
                 db.query(StrategySignalRun)
                 .filter(
@@ -330,8 +337,16 @@ async def send_premarket_plan() -> None:
                     StrategySignalRun.action.in_(["buy", "add"]),
                     StrategySignalRun.entry_low.isnot(None),
                     StrategySignalRun.entry_high.isnot(None),
+                    StrategySignalRun.snapshot_date >= fresh_after,
                 )
             )
+            # 与建仓口径一致:只列模拟盘策略选择启用的策略
+            selected_codes = resolve_enabled_strategy_codes_for_paper(db)
+            if selected_codes is not None:
+                if not selected_codes:
+                    await mgr.notify("【模拟盘盘前计划】", "今日无候选股票(未启用任何策略)")
+                    return
+                query = query.filter(StrategySignalRun.strategy_code.in_(selected_codes))
             if excluded:
                 query = query.filter(StrategySignalRun.stock_market.notin_(excluded))
             signals = query.order_by(StrategySignalRun.rank_score.desc()).all()

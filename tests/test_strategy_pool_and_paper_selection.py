@@ -44,8 +44,10 @@ def _signal(
     entry_low: float = 9.5,
     entry_high: float = 10.5,
 ) -> StrategySignalRun:
+    from datetime import date
+
     return StrategySignalRun(
-        snapshot_date="2026-06-16",
+        snapshot_date=date.today().strftime("%Y-%m-%d"),
         stock_symbol=symbol,
         stock_market="CN",
         stock_name=symbol,
@@ -200,7 +202,7 @@ def test_top_n_selection_excludes_insufficient_samples(monkeypatch, tmp_path):
 
 
 def test_paper_entries_use_selected_strategy_and_record_skips(monkeypatch, tmp_path):
-    """模拟盘 — 自定义策略选择只建仓选中策略，并记录未选中跳过原因"""
+    """模拟盘 — 自定义策略选择只建仓选中策略,未选中策略在SQL层被过滤"""
     Session = _session_factory(tmp_path)
     _patch_sessions(monkeypatch, Session)
     db = Session()
@@ -254,7 +256,8 @@ def test_paper_entries_use_selected_strategy_and_record_skips(monkeypatch, tmp_p
         pos = db.query(PaperTradingPosition).first()
         assert pos.stock_symbol == "600001"
         assert pos.quantity == 10_000
-        assert any(evt["reason"] == "strategy_not_selected" for evt in skip_events)
+        # 未选中策略的信号在 SQL 层就被过滤,不进入候选(也不再产生逐条跳过事件)
+        assert all(evt["reason"] != "existing_position" or evt["strategy_code"] != "macd_golden" for evt in skip_events)
     finally:
         db.close()
 
