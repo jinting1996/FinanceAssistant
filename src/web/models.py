@@ -351,6 +351,33 @@ class WatchedBoard(Base):
     board_name = Column(String, nullable=False)
     sort_order = Column(Integer, default=0)
     enabled = Column(Boolean, default=True)
+    # 板块池: category=六大分类 slug(空=未分类), tier=pool(池内常驻)/pinned(重点关注),
+    # scope=industry/concept, tags=安全体系等横向标签
+    category = Column(String, nullable=False, default="")
+    tier = Column(String, nullable=False, default="pool")
+    scope = Column(String, nullable=False, default="industry")
+    tags = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class BoardEventMark(Base):
+    """板块K线上的事件标注(手工录入或后续管道自动写入)。"""
+
+    __tablename__ = "board_event_marks"
+    __table_args__ = (
+        Index("ix_board_event_marks_lookup", "market", "board_code", "date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    market = Column(String, nullable=False, default="CN")
+    board_code = Column(String, nullable=False)
+    date = Column(String, nullable=False)  # YYYY-MM-DD
+    event_type = Column(String, nullable=False, default="case")  # policy/industry/earnings/macro/case
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    importance = Column(Integer, nullable=False, default=1)  # 1=普通 2=重要(缩小视图仍显示)
+    source = Column(String, nullable=False, default="manual")  # manual/auto
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

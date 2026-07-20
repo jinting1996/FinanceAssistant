@@ -2052,6 +2052,42 @@ def _m125_strategy_pool_tags(conn: Connection) -> None:
     )
 
 
+def _m126_sector_pool(conn: Connection) -> None:
+    """板块池: watched_boards 补 category/tier/scope/tags;存量行视为重点关注(pinned)。
+
+    board_event_marks 表由 create_all 创建,此处不重复建表。
+    """
+    if not _has_table(conn, "watched_boards"):
+        return
+    had_tier = _has_column(conn, "watched_boards", "tier")
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "category",
+        "ALTER TABLE watched_boards ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+    )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "tier",
+        "ALTER TABLE watched_boards ADD COLUMN tier TEXT NOT NULL DEFAULT 'pool'",
+    )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "scope",
+        "ALTER TABLE watched_boards ADD COLUMN scope TEXT NOT NULL DEFAULT 'industry'",
+    )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "tags",
+        "ALTER TABLE watched_boards ADD COLUMN tags JSON",
+    )
+    if not had_tier:
+        conn.execute(text("UPDATE watched_boards SET tier = 'pinned'"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "legacy_schema_and_columns", _m001_legacy_schema_columns, imperative=True),
     Migration(2, "legacy_old_providers", _m002_legacy_old_providers, imperative=True),
@@ -2083,6 +2119,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(123, "base_position_vwap_t", _m123_base_position_vwap_t),
     Migration(124, "strategy_analysis_chat_binding", _m124_strategy_analysis_tables),
     Migration(125, "strategy_pool_tags", _m125_strategy_pool_tags),
+    Migration(126, "sector_pool", _m126_sector_pool),
 )
 
 

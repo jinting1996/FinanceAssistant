@@ -215,7 +215,7 @@ class EastMoneyDiscoveryCollector:
         if not code:
             return []
 
-        limit = max(1, min(int(days or 120), 500))
+        limit = max(1, min(int(days or 120), 1300))
         params = {
             "secid": f"90.{code}",
             "klt": "101",
