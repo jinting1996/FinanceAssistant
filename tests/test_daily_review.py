@@ -324,7 +324,8 @@ def test_render_markdown_hide_amounts():
     """hide_amounts 模式不输出任何绝对金额，仅保留比例。"""
     md = review.render_review_markdown(_sample_data(), hide_amounts=True)
     assert "¥" not in md
-    assert "总资产" not in md
+    # 总资产金额行被隐藏;"(市值 / 总资产)"公式说明不含金额,允许保留
+    assert "- 总资产：" not in md
     assert "+7.00%" in md  # 浮盈百分比保留
     assert "51.69%" in md  # 仓位比例保留
     # 成交表不含金额列

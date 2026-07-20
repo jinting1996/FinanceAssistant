@@ -2052,35 +2052,40 @@ def _m125_strategy_pool_tags(conn: Connection) -> None:
     )
 
 
-def _m126_reenable_workflow_agents(conn: Connection) -> None:
-    """一次性修复：重新启用被默认禁用的工作流 Agent。
+def _m126_sector_pool(conn: Connection) -> None:
+    """板块池: watched_boards 补 category/tier/scope/tags;存量行视为重点关注(pinned)。
 
-    早期版本 premarket_outlook / intraday_monitor 默认 enabled=False，
-    news_digest 被降级为 capability（enabled=False, schedule='', kind='capability'）。
-    此迁移将三者恢复为可调度的工作流 Agent。仅执行一次，之后用户可自行在 UI 关闭。
+    board_event_marks 表由 create_all 创建,此处不重复建表。
     """
-    if not _has_table(conn, "agent_configs"):
+    if not _has_table(conn, "watched_boards"):
         return
-
-    conn.execute(
-        text(
-            """
-UPDATE agent_configs
-SET kind = 'workflow',
-    visible = 1,
-    lifecycle_status = 'active',
-    replaced_by = '',
-    enabled = 1,
-    schedule = CASE name
-      WHEN 'premarket_outlook' THEN '0 9 * * 1-5'
-      WHEN 'intraday_monitor' THEN '*/5 9-15 * * 1-5'
-      WHEN 'news_digest' THEN '0 8,12,18 * * 1-5'
-      ELSE schedule
-    END
-WHERE name IN ('premarket_outlook', 'intraday_monitor', 'news_digest')
-"""
-        )
+    had_tier = _has_column(conn, "watched_boards", "tier")
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "category",
+        "ALTER TABLE watched_boards ADD COLUMN category TEXT NOT NULL DEFAULT ''",
     )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "tier",
+        "ALTER TABLE watched_boards ADD COLUMN tier TEXT NOT NULL DEFAULT 'pool'",
+    )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "scope",
+        "ALTER TABLE watched_boards ADD COLUMN scope TEXT NOT NULL DEFAULT 'industry'",
+    )
+    _add_column_if_missing(
+        conn,
+        "watched_boards",
+        "tags",
+        "ALTER TABLE watched_boards ADD COLUMN tags JSON",
+    )
+    if not had_tier:
+        conn.execute(text("UPDATE watched_boards SET tier = 'pinned'"))
 
 
 MIGRATIONS: tuple[Migration, ...] = (
@@ -2114,7 +2119,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(123, "base_position_vwap_t", _m123_base_position_vwap_t),
     Migration(124, "strategy_analysis_chat_binding", _m124_strategy_analysis_tables),
     Migration(125, "strategy_pool_tags", _m125_strategy_pool_tags),
-    Migration(126, "reenable_workflow_agents", _m126_reenable_workflow_agents),
+    Migration(126, "sector_pool", _m126_sector_pool),
 )
 
 

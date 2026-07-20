@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
-import { Moon, Sun, TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, LogOut, Github, BellRing, MoreHorizontal, Sparkles, Activity, CalendarDays, SlidersHorizontal, Trophy } from 'lucide-react'
+import { Moon, Sun, TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, LogOut, Github, BellRing, MoreHorizontal, Sparkles, Activity, CalendarDays, SlidersHorizontal, Trophy, Layers } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { appApi, fetchAPI, isAuthenticated, logout } from '@panwatch/api'
 import DashboardPage from '@/pages/Dashboard'
@@ -14,6 +14,7 @@ import AnalysisDetailPage from '@/pages/AnalysisDetail'
 import PriceAlertsPage from '@/pages/PriceAlerts'
 import PaperTradingPage from '@/pages/PaperTrading'
 import MarketEventsPage from '@/pages/MarketEvents'
+import SectorPoolPage from '@/pages/SectorPool'
 import TradeRulesPage from '@/pages/TradeRules'
 import StrategiesPage from '@/pages/Strategies'
 import LoginPage from '@/pages/Login'
@@ -33,6 +34,7 @@ const NAV = {
   screener: { to: '/screener', icon: SlidersHorizontal, label: '选股' },
   opportunities: { to: '/opportunities', icon: Sparkles, label: '机会' },
   events: { to: '/events', icon: CalendarDays, label: '事件' },
+  sectors: { to: '/sectors', icon: Layers, label: '板块池' },
   strategies: { to: '/strategies', icon: Trophy, label: '策略' },
   paper: { to: '/paper-trading', icon: Activity, label: '模拟盘' },
   agents: { to: '/agents', icon: Bot, label: 'Agent' },
@@ -44,7 +46,7 @@ const NAV = {
 // 按使用意图分组(规则已并入设置,不再作为一级入口;回测在「策略」页内)
 const NAV_GROUPS: NavGroup[] = [
   { label: '盯盘', items: [NAV.home, NAV.portfolio, NAV.alerts] },
-  { label: '发现', items: [NAV.screener, NAV.opportunities, NAV.events] },
+  { label: '发现', items: [NAV.screener, NAV.opportunities, NAV.events, NAV.sectors] },
   { label: '策略', items: [NAV.strategies, NAV.paper] },
   { label: '系统', items: [NAV.agents, NAV.history, NAV.datasources, NAV.settings] },
 ]
@@ -394,6 +396,7 @@ function App() {
           <Route path="/strategies" element={<StrategiesPage />} />
           <Route path="/screener" element={<DiscoverPage initialTab="screener" />} />
           <Route path="/events" element={<MarketEventsPage />} />
+          <Route path="/sectors" element={<SectorPoolPage />} />
           <Route path="/portfolio" element={<StocksPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/history" element={<HistoryPage />} />

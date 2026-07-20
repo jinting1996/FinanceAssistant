@@ -111,7 +111,7 @@ class TencentBoardCollector:
         board_code = (code or "").strip()
         if not board_code:
             return []
-        safe = max(1, min(int(days or 120), 500))
+        safe = max(1, min(int(days or 120), 1300))
         params = {"param": f"{board_code},day,,,{safe},qfq"}
         data = await self._request(self.KLINE_API, params=params)
         node = ((data or {}).get("data") or {}).get(board_code)

@@ -87,6 +87,19 @@ export interface MarketEventsOverview {
   }
 }
 
+export type SectorCategoryKey =
+  | 'finance'
+  | 'resource'
+  | 'energy'
+  | 'channel'
+  | 'consumer'
+  | 'theme'
+  | 'other'
+
+export type BoardTier = 'pool' | 'pinned'
+export type BoardScope = 'industry' | 'concept'
+export type BoardEventType = 'policy' | 'industry' | 'earnings' | 'macro' | 'case'
+
 export interface WatchedBoardItem {
   id: number
   market: 'CN'
@@ -94,8 +107,46 @@ export interface WatchedBoardItem {
   board_name: string
   sort_order: number
   enabled: boolean
+  category: SectorCategoryKey | ''
+  tier: BoardTier
+  scope: BoardScope
+  tags: string[]
   created_at: string | null
   updated_at: string | null
+}
+
+export interface PoolBoardItem extends WatchedBoardItem {
+  change_pct: number | null
+  turnover: number | null
+  leader_name?: string | null
+}
+
+export interface BoardPoolResponse {
+  market: 'CN'
+  categories: Array<{
+    key: SectorCategoryKey
+    label: string
+    boards: PoolBoardItem[]
+  }>
+  board_count: number
+  seed_report: {
+    created: number
+    updated: number
+    unresolved: string[]
+    total_seed: number
+  } | null
+}
+
+export interface BoardEventMarkItem {
+  id: number
+  market: 'CN'
+  board_code: string
+  date: string
+  event_type: BoardEventType
+  title: string
+  summary: string
+  importance: number
+  source: 'manual' | 'auto'
 }
 
 export interface BoardSearchItem {
@@ -227,14 +278,82 @@ export const marketEventsApi = {
       timeoutMs: 60000,
     }),
 
-  boardKline: (boardCode: string, params?: { market?: 'CN'; days?: number }) =>
+  boardKline: (boardCode: string, params?: { market?: 'CN'; days?: number; interval?: '1d' | '1w' }) =>
     fetchAPI<BoardKlineResponse>(
       withQuery(`/market-events/boards/${encodeURIComponent(boardCode)}/kline`, {
         market: params?.market || 'CN',
         days: params?.days || 120,
+        interval: params?.interval,
       }),
       { timeoutMs: 30000 }
     ),
+
+  boardPool: (params?: { market?: 'CN'; auto_seed?: boolean }) =>
+    fetchAPI<BoardPoolResponse>(
+      withQuery('/market-events/boards/pool', {
+        market: params?.market,
+        auto_seed: params?.auto_seed,
+      }),
+      { timeoutMs: 60000 }
+    ),
+
+  reseedBoardPool: () =>
+    fetchAPI<BoardPoolResponse['seed_report']>('/market-events/boards/pool/seed', {
+      method: 'POST',
+      timeoutMs: 60000,
+    }),
+
+  addPoolBoard: (payload: {
+    market?: 'CN'
+    board_code: string
+    board_name: string
+    category?: SectorCategoryKey | ''
+    scope?: BoardScope
+  }) =>
+    fetchAPI<WatchedBoardItem>('/market-events/boards/pool', {
+      method: 'POST',
+      body: JSON.stringify({ market: payload.market || 'CN', ...payload }),
+      timeoutMs: 30000,
+    }),
+
+  updatePoolBoard: (
+    boardCode: string,
+    payload: { market?: 'CN'; category?: SectorCategoryKey | ''; tier?: BoardTier; enabled?: boolean }
+  ) =>
+    fetchAPI<WatchedBoardItem>(`/market-events/boards/pool/${encodeURIComponent(boardCode)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ market: payload.market || 'CN', ...payload }),
+      timeoutMs: 30000,
+    }),
+
+  listBoardEvents: (boardCode: string, market: 'CN' = 'CN') =>
+    fetchAPI<BoardEventMarkItem[]>(
+      withQuery(`/market-events/boards/${encodeURIComponent(boardCode)}/events`, { market }),
+      { timeoutMs: 30000 }
+    ),
+
+  createBoardEvent: (
+    boardCode: string,
+    payload: {
+      market?: 'CN'
+      date: string
+      event_type: BoardEventType
+      title: string
+      summary?: string
+      importance?: number
+    }
+  ) =>
+    fetchAPI<BoardEventMarkItem>(`/market-events/boards/${encodeURIComponent(boardCode)}/events`, {
+      method: 'POST',
+      body: JSON.stringify({ market: payload.market || 'CN', ...payload }),
+      timeoutMs: 30000,
+    }),
+
+  deleteBoardEvent: (markId: number) =>
+    fetchAPI<{ ok: boolean }>(`/market-events/boards/events/${markId}`, {
+      method: 'DELETE',
+      timeoutMs: 30000,
+    }),
 
   boardSignals: (boardCode: string, params?: { market?: 'CN'; days?: number }) =>
     fetchAPI<BoardSignalSummary>(

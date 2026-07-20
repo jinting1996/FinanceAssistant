@@ -42,6 +42,23 @@ type PriceActionOverlay = {
   }>
 }
 
+export type KlineEventMarker = {
+  id?: number
+  date: string
+  event_type: string
+  title: string
+  summary?: string
+  importance?: number
+}
+
+export const EVENT_MARKER_STYLES: Record<string, { color: string; label: string; short: string }> = {
+  policy: { color: '#3b82f6', label: '政策', short: '政' },
+  industry: { color: '#8b5cf6', label: '产业', short: '产' },
+  earnings: { color: '#f59e0b', label: '业绩', short: '业' },
+  macro: { color: '#64748b', label: '宏观', short: '宏' },
+  case: { color: '#eab308', label: '标注', short: '记' },
+}
+
 type HoverTipRow = {
   date: string
   open: number
@@ -57,6 +74,7 @@ type HoverTipRow = {
   rsi6: number | null
   volume: number
   amount: number | null
+  events?: KlineEventMarker[]
 }
 
 type HoverTip = {
@@ -210,26 +228,66 @@ function addHistogram(chart: any, LW: any, options: any) {
   throw new Error('Histogram series API not available')
 }
 
-function applySeriesMarkers(series: any, LW: any, markers: any[]) {
-  if (!markers.length) return
+function createMarkersController(series: any, LW: any): { set: (markers: any[]) => void } {
+  let applied = false
   if (typeof series?.setMarkers === 'function') {
-    series.setMarkers(markers)
-    return
+    return {
+      set: markers => {
+        if (!markers.length && !applied) return
+        applied = true
+        series.setMarkers(markers)
+      },
+    }
   }
   if (typeof LW?.createSeriesMarkers === 'function') {
-    LW.createSeriesMarkers(series, markers)
+    // v5 API: createSeriesMarkers 返回句柄,重复调用会叠加图元,必须复用句柄更新
+    let handle: any = null
+    return {
+      set: markers => {
+        if (!markers.length && !handle) return
+        if (handle && typeof handle.setMarkers === 'function') {
+          handle.setMarkers(markers)
+        } else {
+          handle = LW.createSeriesMarkers(series, markers)
+        }
+      },
+    }
   }
+  return { set: () => {} }
+}
+
+/** 事件日期吸附到已加载K线的交易日(取 >= 事件日的第一根;超出范围返回 null)。 */
+function snapEventToKline(dateStr: string, klines: SeriesKline[]): SeriesKline | null {
+  const target = String(dateStr || '').slice(0, 10)
+  if (!target || !klines.length) return null
+  if (target < String(klines[0].date).slice(0, 10)) return null
+  let lo = 0
+  let hi = klines.length - 1
+  let ans = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (String(klines[mid].date).slice(0, 10) >= target) {
+      ans = mid
+      hi = mid - 1
+    } else {
+      lo = mid + 1
+    }
+  }
+  return ans >= 0 ? klines[ans] : klines[klines.length - 1]
 }
 
 export default function InteractiveKline(props: {
   symbol: string
   market: string
   initialInterval?: KlineInterval
-  initialDays?: '60' | '120' | '250'
+  initialDays?: '60' | '120' | '250' | string
   density?: 'normal' | 'compact' | 'mini'
   availableIntervals?: KlineInterval[]
   endpointBuilder?: (args: { symbol: string; market: string; days: number; interval: KlineInterval }) => string
   showPriceAction?: boolean
+  eventMarkers?: KlineEventMarker[]
+  onEventMarkerClick?: (marker: KlineEventMarker) => void
+  focusDate?: string | null
 }) {
   const isCompact = props.density === 'compact'
   const isMini = props.density === 'mini'
@@ -274,6 +332,7 @@ export default function InteractiveKline(props: {
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const macdRef = useRef<HTMLDivElement | null>(null)
+  const chartApiRef = useRef<any>(null)
 
   const load = async () => {
     if (!props.symbol) return
@@ -430,6 +489,27 @@ export default function InteractiveKline(props: {
     }
     return m
   }, [series.klines])
+
+  // 事件标注吸附到已加载K线交易日,并按 timeKey 分桶供标记/悬浮提示/点击共用
+  const snappedEvents = useMemo(() => {
+    if (isIntradayInterval(interval)) return []
+    const out: Array<{ marker: KlineEventMarker; kline: SeriesKline }> = []
+    for (const ev of props.eventMarkers || []) {
+      const k = snapEventToKline(ev.date, series.klines)
+      if (k) out.push({ marker: ev, kline: k })
+    }
+    return out
+  }, [props.eventMarkers, series.klines, interval])
+
+  const eventsByTimeKey = useMemo(() => {
+    const m = new Map<string, KlineEventMarker[]>()
+    for (const { marker, kline } of snappedEvents) {
+      const list = m.get(kline.timeKey) || []
+      list.push(marker)
+      m.set(kline.timeKey, list)
+    }
+    return m
+  }, [snappedEvents])
   const showSkeleton = loading && !series.klines.length
 
   useEffect(() => {
@@ -494,6 +574,7 @@ export default function InteractiveKline(props: {
         : series.candles,
     )
 
+    const paMarkers: any[] = []
     if (interval === '1d' && priceAction?.valid) {
       const priceLines = [
         ['resistance', 'PA压力', '#f59e0b'],
@@ -506,21 +587,69 @@ export default function InteractiveKline(props: {
         if (!Number.isFinite(price) || price <= 0) continue
         mainSeries.createPriceLine?.({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title })
       }
-      const markers = (priceAction.events || [])
-        .map(event => {
-          const time = parseBusinessDay(event.date)
-          if (!time) return null
-          const pullback = event.type === 'pullback_confirm'
-          return {
-            time,
-            position: 'belowBar',
-            color: pullback ? '#0ea5e9' : '#f59e0b',
-            shape: 'arrowUp',
-            text: event.text || (pullback ? 'PA回踩' : 'PA突破'),
-          }
+      for (const event of priceAction.events || []) {
+        const time = parseBusinessDay(event.date)
+        if (!time) continue
+        const pullback = event.type === 'pullback_confirm'
+        paMarkers.push({
+          time,
+          position: 'belowBar',
+          color: pullback ? '#0ea5e9' : '#f59e0b',
+          shape: 'arrowUp',
+          text: event.text || (pullback ? 'PA回踩' : 'PA突破'),
         })
-        .filter(Boolean)
-      applySeriesMarkers(mainSeries, LW, markers as any[])
+      }
+    }
+
+    // 事件标注:同一交易日多条事件合并成一个圆点;宽视野(>260根)只显示重要事件,避免糊成一团
+    const markersController = createMarkersController(mainSeries, LW)
+    const buildEventMarkers = (minImportance: number) => {
+      const byKey = new Map<string, { kline: SeriesKline; events: KlineEventMarker[] }>()
+      for (const { marker, kline } of snappedEvents) {
+        if ((marker.importance || 1) < minImportance) continue
+        const slot = byKey.get(kline.timeKey) || { kline, events: [] }
+        slot.events.push(marker)
+        byKey.set(kline.timeKey, slot)
+      }
+      return Array.from(byKey.values()).map(({ kline, events }) => {
+        const first = events[0]
+        const style = EVENT_MARKER_STYLES[first.event_type] || EVENT_MARKER_STYLES.case
+        return {
+          time: kline.time,
+          position: 'aboveBar',
+          color: style.color,
+          shape: 'circle',
+          text: events.length > 1 ? `${style.short}+${events.length - 1}` : style.short,
+        }
+      })
+    }
+    let currentMinImportance = -1
+    const applyMarkers = (minImportance: number) => {
+      if (minImportance === currentMinImportance) return
+      currentMinImportance = minImportance
+      const merged = [...paMarkers, ...buildEventMarkers(minImportance)]
+      merged.sort((a, b) => {
+        const ka = typeof a.time === 'number' ? a.time : Date.UTC(a.time.year, a.time.month - 1, a.time.day)
+        const kb = typeof b.time === 'number' ? b.time : Date.UTC(b.time.year, b.time.month - 1, b.time.day)
+        return ka - kb
+      })
+      markersController.set(merged)
+    }
+    applyMarkers(1)
+
+    if (snappedEvents.length) {
+      chart.timeScale().subscribeVisibleLogicalRangeChange?.((range: any) => {
+        if (!range) return
+        const span = Number(range.to) - Number(range.from)
+        if (!Number.isFinite(span)) return
+        applyMarkers(span > 260 ? 2 : 1)
+      })
+      chart.subscribeClick?.((param: any) => {
+        const timeKey = parseCrosshairTimeKey(param?.time)
+        if (!timeKey) return
+        const events = eventsByTimeKey.get(timeKey)
+        if (events?.length) props.onEventMarkerClick?.(events[0])
+      })
     }
 
     const volSeries = addHistogram(chart, LW, {
@@ -703,24 +832,43 @@ export default function InteractiveKline(props: {
           rsi6: series.rsi6[idx],
           volume: Number(k.volume || 0),
           amount: k.amount == null ? null : Number(k.amount),
+          events: eventsByTimeKey.get(timeKey) || undefined,
         },
       })
     })
+
+    const total = series.candles.length
+    const from = Math.max(0, total - defaultBars)
+    const to = Math.max(total - 1, 0)
+    // 容器宽度为 0 时(初始布局未完成)setVisibleLogicalRange 会被钳制成末尾 1-2 根,
+    // 且 lockVisibleTimeRangeOnResize 会在宽度恢复后锁住这个错误区间;
+    // 因此记录是否已在有效宽度下应用过初始区间,宽度就绪时在 ResizeObserver 里补一次。
+    let initialRangeApplied = false
+    const applyInitialRange = () => {
+      if (initialRangeApplied || container.clientWidth <= 0) return
+      initialRangeApplied = true
+      try {
+        chart.timeScale().setVisibleLogicalRange({ from, to })
+      } catch {
+        // ignore
+      }
+    }
 
     const ro = new ResizeObserver(() => {
       chart.applyOptions({ width: container.clientWidth })
       if (macdEl) macdChart?.applyOptions({ width: macdEl.clientWidth })
       if (macdEl && rsiChart) rsiChart?.applyOptions({ width: macdEl.clientWidth })
+      applyInitialRange()
     })
     ro.observe(container)
     if (macdEl) ro.observe(macdEl)
 
-    const total = series.candles.length
-    const from = Math.max(0, total - defaultBars)
-    const to = Math.max(total - 1, 0)
     chart.timeScale().setVisibleLogicalRange({ from, to })
+    applyInitialRange()
+    chartApiRef.current = chart
     return () => {
       ro.disconnect()
+      chartApiRef.current = null
       try {
         chart.remove()
       } catch {
@@ -737,7 +885,27 @@ export default function InteractiveKline(props: {
         // ignore
       }
     }
-  }, [series, lwReady, showRsi, indexByDate, interval, chartHeight, macdHeight, rsiHeight, priceAction])
+  }, [series, lwReady, showRsi, indexByDate, interval, chartHeight, macdHeight, rsiHeight, priceAction, snappedEvents, eventsByTimeKey])
+
+  // 外部(事件时间轴)点击定位:把图滚动到目标日期附近并居中
+  useEffect(() => {
+    const chart = chartApiRef.current
+    const focus = (props.focusDate || '').slice(0, 10)
+    if (!chart || !focus || !series.klines.length) return
+    const k = snapEventToKline(focus, series.klines)
+    if (!k) return
+    const idx = indexByDate.get(k.timeKey)
+    if (idx == null) return
+    const halfWindow = 40
+    try {
+      chart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, idx - halfWindow),
+        to: Math.min(series.klines.length - 1, idx + halfWindow),
+      })
+    } catch {
+      // ignore
+    }
+  }, [props.focusDate, series.klines, indexByDate])
 
   return (
     <div className={`card ${dense ? 'p-2.5' : 'p-4 md:p-5'}`}>
@@ -821,6 +989,19 @@ export default function InteractiveKline(props: {
         </div>
       ) : null}
 
+      {snappedEvents.length ? (
+        <div className="mb-2 flex items-center gap-2 flex-wrap text-[10px] text-muted-foreground">
+          <span>事件标记:</span>
+          {Object.entries(EVENT_MARKER_STYLES).map(([key, style]) => (
+            <span key={key} className="inline-flex items-center gap-1">
+              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: style.color }} />
+              {style.label}
+            </span>
+          ))}
+          <span className="ml-1">悬浮看简述,点击圆点定位时间轴</span>
+        </div>
+      ) : null}
+
       {!dense && interval === '1d' && priceAction?.valid ? (
         <div className="mb-3 flex items-center gap-2 flex-wrap rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px]">
           <span className="font-semibold text-foreground">Price Action {Math.round(priceAction.score || 0)}分</span>
@@ -845,6 +1026,30 @@ export default function InteractiveKline(props: {
             style={{ left: `${hoverTip.x}px`, top: `${hoverTip.y}px` }}
           >
             <div className="text-[11px] text-foreground font-medium mb-1.5">{hoverTip.row.date}</div>
+            {hoverTip.row.events?.length ? (
+              <div className="mb-1.5 space-y-1 border-b border-border/50 pb-1.5">
+                {hoverTip.row.events.slice(0, 3).map((ev, i) => {
+                  const style = EVENT_MARKER_STYLES[ev.event_type] || EVENT_MARKER_STYLES.case
+                  return (
+                    <div key={ev.id ?? `${ev.date}-${i}`} className="text-[11px]">
+                      <span
+                        className="mr-1 inline-block rounded px-1 py-px text-[10px] text-white"
+                        style={{ backgroundColor: style.color }}
+                      >
+                        {style.label}
+                      </span>
+                      <span className="text-foreground">{ev.title}</span>
+                      {ev.summary ? (
+                        <div className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{ev.summary}</div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+                {hoverTip.row.events.length > 3 ? (
+                  <div className="text-[10px] text-muted-foreground">还有 {hoverTip.row.events.length - 3} 条事件…</div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
               <span>开盘价 <span className="font-mono text-foreground">{hoverTip.row.open.toFixed(2)}</span></span>
               <span>收盘价 <span className="font-mono text-foreground">{hoverTip.row.close.toFixed(2)}</span></span>

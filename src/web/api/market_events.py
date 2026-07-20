@@ -23,13 +23,20 @@ from src.config import Settings
 from src.core.board_signals import build_board_signal
 from src.core.notifier import get_global_proxy
 from src.web.database import get_db
-from src.web.models import BoardKlineCache, Stock, WatchedBoard
+from src.core.sector_pool import (
+    SECTOR_CATEGORIES,
+    fetch_all_boards,
+    seed_sector_pool,
+)
+from src.web.models import BoardEventMark, BoardKlineCache, Stock, WatchedBoard
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_WATCHED_BOARDS = 8
 DEFAULT_BOARD_DAYS = 120
+MAX_BOARD_DAYS = 1300  # ~5 年交易日,供板块池长周期K线
+EVENT_TYPES = ("policy", "industry", "earnings", "macro", "case")
 
 # A 股事件统一按北京时间处理,避免服务器在 UTC 时区时日期/时间偏移。
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -140,10 +147,42 @@ class WatchBoardRequest(BaseModel):
     board_name: str
 
 
+class PoolBoardRequest(BaseModel):
+    market: str = Field(default="CN")
+    board_code: str
+    board_name: str
+    category: str = Field(default="")
+    scope: str = Field(default="industry")
+
+
+class PoolBoardUpdateRequest(BaseModel):
+    market: str = Field(default="CN")
+    category: str | None = None
+    tier: str | None = None  # pool / pinned
+    enabled: bool | None = None
+
+
+class BoardEventMarkRequest(BaseModel):
+    market: str = Field(default="CN")
+    date: str  # YYYY-MM-DD
+    event_type: str = Field(default="case")
+    title: str
+    summary: str | None = None
+    importance: int = Field(default=1, ge=1, le=2)
+
+
+class BoardEventMarkUpdateRequest(BaseModel):
+    date: str | None = None
+    event_type: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    importance: int | None = Field(default=None, ge=1, le=2)
+
+
 class BoardRefreshRequest(BaseModel):
     market: str = Field(default="CN")
     board_codes: list[str] | None = None
-    days: int = Field(default=DEFAULT_BOARD_DAYS, ge=30, le=250)
+    days: int = Field(default=DEFAULT_BOARD_DAYS, ge=30, le=MAX_BOARD_DAYS)
 
 
 def _resolve_proxy() -> str:
@@ -890,8 +929,26 @@ def _board_to_dict(board: WatchedBoard) -> dict:
         "board_name": board.board_name,
         "sort_order": board.sort_order or 0,
         "enabled": bool(board.enabled),
+        "category": board.category or "",
+        "tier": board.tier or "pool",
+        "scope": board.scope or "industry",
+        "tags": list(board.tags or []),
         "created_at": board.created_at.isoformat() if board.created_at else None,
         "updated_at": board.updated_at.isoformat() if board.updated_at else None,
+    }
+
+
+def _event_mark_to_dict(mark: BoardEventMark) -> dict:
+    return {
+        "id": mark.id,
+        "market": mark.market,
+        "board_code": mark.board_code,
+        "date": mark.date,
+        "event_type": mark.event_type or "case",
+        "title": mark.title,
+        "summary": mark.summary or "",
+        "importance": int(mark.importance or 1),
+        "source": mark.source or "manual",
     }
 
 
@@ -915,11 +972,37 @@ def _query_cached_klines(db: Session, market: str, board_code: str, days: int) -
         db.query(BoardKlineCache)
         .filter(BoardKlineCache.market == market, BoardKlineCache.board_code == board_code)
         .order_by(BoardKlineCache.date.desc())
-        .limit(max(1, min(int(days or DEFAULT_BOARD_DAYS), 250)))
+        .limit(max(1, min(int(days or DEFAULT_BOARD_DAYS), MAX_BOARD_DAYS)))
         .all()
     )
     rows.reverse()
     return rows
+
+
+def _aggregate_weekly(rows: list[dict]) -> list[dict]:
+    """日K聚合为周K(ISO 周),date 取周内最后一个交易日。"""
+    out: list[dict] = []
+    current_key: tuple[int, int] | None = None
+    for row in rows:
+        try:
+            d = datetime.strptime(str(row["date"])[:10], "%Y-%m-%d")
+        except ValueError:
+            continue
+        iso = d.isocalendar()
+        key = (iso[0], iso[1])
+        if key != current_key:
+            out.append(dict(row))
+            current_key = key
+            continue
+        last = out[-1]
+        last["date"] = row["date"]
+        last["high"] = max(last["high"], row["high"])
+        last["low"] = min(last["low"], row["low"])
+        last["close"] = row["close"]
+        for k in ("volume", "turnover"):
+            if row.get(k) is not None:
+                last[k] = (last.get(k) or 0) + row[k]
+    return out
 
 
 async def _refresh_one_board(
@@ -978,10 +1061,17 @@ async def _refresh_one_board(
 
 
 async def _ensure_board_klines(db: Session, market: str, board_code: str, days: int) -> list[BoardKlineCache]:
-    days = max(30, min(int(days or DEFAULT_BOARD_DAYS), 250))
+    days = max(30, min(int(days or DEFAULT_BOARD_DAYS), MAX_BOARD_DAYS))
     rows = _query_cached_klines(db, market, board_code, days)
     if len(rows) >= min(days, 60):
-        return rows
+        # 缓存覆盖不足请求跨度(如首次请求 3-5 年)时补拉全量。全量拉取会重写最老的行,
+        # 所以用"最老一行的 fetched_at"判断近 6 小时内是否已尝试过全量——
+        # 板块历史可能本身短于请求跨度,时间闸门避免每次请求都打上游。
+        if len(rows) >= days - 30:
+            return rows
+        oldest_fetch = min((r.fetched_at for r in rows if r.fetched_at), default=None)
+        if oldest_fetch and (datetime.now() - oldest_fetch) < timedelta(hours=6):
+            return rows
     await _refresh_one_board(db, market=market, board_code=board_code, days=days)
     return _query_cached_klines(db, market, board_code, days)
 
@@ -1146,7 +1236,7 @@ async def _search_tencent_boards() -> list[dict]:
 def get_board_watchlist(db: Session = Depends(get_db)):
     rows = (
         db.query(WatchedBoard)
-        .filter(WatchedBoard.enabled == True)  # noqa: E712
+        .filter(WatchedBoard.enabled == True, WatchedBoard.tier == "pinned")  # noqa: E712
         .order_by(WatchedBoard.sort_order.asc(), WatchedBoard.id.asc())
         .all()
     )
@@ -1168,21 +1258,29 @@ def add_board_to_watchlist(payload: WatchBoardRequest, db: Session = Depends(get
         .filter(WatchedBoard.market == market, WatchedBoard.board_code == code)
         .first()
     )
+    pinned_count = (
+        db.query(WatchedBoard)
+        .filter(WatchedBoard.enabled == True, WatchedBoard.tier == "pinned")  # noqa: E712
+        .count()
+    )
     if existing:
+        if existing.tier != "pinned" and pinned_count >= MAX_WATCHED_BOARDS:
+            raise HTTPException(400, f"最多关注 {MAX_WATCHED_BOARDS} 个板块")
         existing.board_name = name
         existing.enabled = True
+        existing.tier = "pinned"
         db.commit()
         db.refresh(existing)
         return _board_to_dict(existing)
 
-    active_count = db.query(WatchedBoard).filter(WatchedBoard.enabled == True).count()  # noqa: E712
-    if active_count >= MAX_WATCHED_BOARDS:
+    if pinned_count >= MAX_WATCHED_BOARDS:
         raise HTTPException(400, f"最多关注 {MAX_WATCHED_BOARDS} 个板块")
     max_order = db.query(func.max(WatchedBoard.sort_order)).scalar() or 0
     row = WatchedBoard(
         market=market,
         board_code=code,
         board_name=name,
+        tier="pinned",
         sort_order=int(max_order) + 1,
         enabled=True,
     )
@@ -1196,6 +1294,7 @@ def add_board_to_watchlist(payload: WatchBoardRequest, db: Session = Depends(get
 def delete_board_from_watchlist(
     board_code: str,
     market: str = Query("CN"),
+    hard: bool = Query(False, description="true=彻底删除;默认板块池成员仅降级为 pool"),
     db: Session = Depends(get_db),
 ):
     market = (market or "CN").strip().upper()
@@ -1207,6 +1306,274 @@ def delete_board_from_watchlist(
     )
     if not row:
         raise HTTPException(404, "板块未关注")
+    # 属于板块池(有分类)的板块,取消关注只降级回池,不从池里删掉
+    if not hard and (row.category or ""):
+        row.tier = "pool"
+        db.commit()
+        return {"ok": True, "demoted": True}
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/boards/pool")
+async def get_board_pool(
+    market: str = Query("CN"),
+    auto_seed: bool = Query(True),
+    db: Session = Depends(get_db),
+):
+    """板块池:按六大分类分组返回全部池内板块(含当日涨跌幅)。池为空时自动播种。"""
+    market = (market or "CN").strip().upper()
+    if market != "CN":
+        raise HTTPException(400, "v1 仅支持 A 股板块")
+
+    rows = (
+        db.query(WatchedBoard)
+        .filter(
+            WatchedBoard.market == market,
+            WatchedBoard.enabled == True,  # noqa: E712
+            WatchedBoard.category != "",
+        )
+        .order_by(WatchedBoard.sort_order.asc(), WatchedBoard.id.asc())
+        .all()
+    )
+
+    live_boards: list[dict] = []
+    seed_report = None
+    if not rows and auto_seed:
+        try:
+            live_boards = await fetch_all_boards(proxy=_resolve_proxy() or None)
+            seed_report = seed_sector_pool(db, live_boards)
+            rows = (
+                db.query(WatchedBoard)
+                .filter(
+                    WatchedBoard.market == market,
+                    WatchedBoard.enabled == True,  # noqa: E712
+                    WatchedBoard.category != "",
+                )
+                .order_by(WatchedBoard.sort_order.asc(), WatchedBoard.id.asc())
+                .all()
+            )
+        except Exception as e:
+            logger.warning("板块池自动播种失败: %s", e)
+
+    if not live_boards:
+        try:
+            live_boards = await fetch_all_boards(proxy=_resolve_proxy() or None)
+        except Exception:
+            live_boards = []
+    quote_by_code = {str(b.get("code") or ""): b for b in live_boards}
+
+    categories = []
+    for key, label in SECTOR_CATEGORIES:
+        boards = []
+        for row in rows:
+            if (row.category or "") != key:
+                continue
+            item = _board_to_dict(row)
+            quote = quote_by_code.get(row.board_code) or {}
+            item["change_pct"] = quote.get("change_pct")
+            item["turnover"] = quote.get("turnover")
+            item["leader_name"] = quote.get("leader_name")
+            boards.append(item)
+        if boards:
+            categories.append({"key": key, "label": label, "boards": boards})
+
+    return {
+        "market": market,
+        "categories": categories,
+        "board_count": sum(len(c["boards"]) for c in categories),
+        "seed_report": seed_report,
+    }
+
+
+@router.post("/boards/pool/seed")
+async def reseed_board_pool(db: Session = Depends(get_db)):
+    """手动重新播种板块池(幂等,只补缺)。"""
+    boards = await fetch_all_boards(proxy=_resolve_proxy() or None)
+    if not boards:
+        raise HTTPException(502, "板块名单拉取失败,请稍后重试")
+    report = seed_sector_pool(db, boards)
+    return report
+
+
+@router.post("/boards/pool")
+def add_board_to_pool(payload: PoolBoardRequest, db: Session = Depends(get_db)):
+    """把任意板块(来自搜索)加入板块池并指定分类。"""
+    market = (payload.market or "CN").strip().upper()
+    if market != "CN":
+        raise HTTPException(400, "v1 仅支持 A 股板块")
+    code = (payload.board_code or "").strip()
+    name = (payload.board_name or "").strip()
+    category = (payload.category or "").strip()
+    if not code or not name:
+        raise HTTPException(400, "board_code 和 board_name 不能为空")
+    valid_keys = {k for k, _ in SECTOR_CATEGORIES}
+    if category and category not in valid_keys:
+        raise HTTPException(400, f"category 必须是 {'/'.join(sorted(valid_keys))} 之一")
+
+    row = (
+        db.query(WatchedBoard)
+        .filter(WatchedBoard.market == market, WatchedBoard.board_code == code)
+        .first()
+    )
+    if row:
+        row.board_name = name
+        row.enabled = True
+        if category:
+            row.category = category
+        if payload.scope in ("industry", "concept"):
+            row.scope = payload.scope
+    else:
+        row = WatchedBoard(
+            market=market,
+            board_code=code,
+            board_name=name,
+            category=category or "other",
+            tier="pool",
+            scope=payload.scope if payload.scope in ("industry", "concept") else "industry",
+            enabled=True,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _board_to_dict(row)
+
+
+@router.patch("/boards/pool/{board_code}")
+def update_pool_board(
+    board_code: str,
+    payload: PoolBoardUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """更新池内板块:改分类 / pin与unpin(tier) / 停启用。"""
+    market = (payload.market or "CN").strip().upper()
+    code = (board_code or "").strip()
+    row = (
+        db.query(WatchedBoard)
+        .filter(WatchedBoard.market == market, WatchedBoard.board_code == code)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "板块不在池中")
+
+    if payload.category is not None:
+        valid_keys = {k for k, _ in SECTOR_CATEGORIES}
+        if payload.category and payload.category not in valid_keys:
+            raise HTTPException(400, f"category 必须是 {'/'.join(sorted(valid_keys))} 之一")
+        row.category = payload.category
+    if payload.tier is not None:
+        if payload.tier not in ("pool", "pinned"):
+            raise HTTPException(400, "tier 必须是 pool 或 pinned")
+        if payload.tier == "pinned" and row.tier != "pinned":
+            pinned_count = (
+                db.query(WatchedBoard)
+                .filter(WatchedBoard.enabled == True, WatchedBoard.tier == "pinned")  # noqa: E712
+                .count()
+            )
+            if pinned_count >= MAX_WATCHED_BOARDS:
+                raise HTTPException(400, f"最多关注 {MAX_WATCHED_BOARDS} 个板块")
+        row.tier = payload.tier
+    if payload.enabled is not None:
+        row.enabled = bool(payload.enabled)
+    db.commit()
+    db.refresh(row)
+    return _board_to_dict(row)
+
+
+@router.get("/boards/{board_code}/events")
+def list_board_event_marks(
+    board_code: str,
+    market: str = Query("CN"),
+    db: Session = Depends(get_db),
+):
+    market = (market or "CN").strip().upper()
+    code = (board_code or "").strip()
+    rows = (
+        db.query(BoardEventMark)
+        .filter(BoardEventMark.market == market, BoardEventMark.board_code == code)
+        .order_by(BoardEventMark.date.asc(), BoardEventMark.id.asc())
+        .all()
+    )
+    return [_event_mark_to_dict(x) for x in rows]
+
+
+@router.post("/boards/{board_code}/events")
+def create_board_event_mark(
+    board_code: str,
+    payload: BoardEventMarkRequest,
+    db: Session = Depends(get_db),
+):
+    market = (payload.market or "CN").strip().upper()
+    code = (board_code or "").strip()
+    if not code:
+        raise HTTPException(400, "board_code 不能为空")
+    date_str = (payload.date or "").strip()[:10]
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "date 格式必须是 YYYY-MM-DD")
+    event_type = (payload.event_type or "case").strip()
+    if event_type not in EVENT_TYPES:
+        raise HTTPException(400, f"event_type 必须是 {'/'.join(EVENT_TYPES)} 之一")
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(400, "title 不能为空")
+    row = BoardEventMark(
+        market=market,
+        board_code=code,
+        date=date_str,
+        event_type=event_type,
+        title=title,
+        summary=(payload.summary or "").strip() or None,
+        importance=int(payload.importance or 1),
+        source="manual",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _event_mark_to_dict(row)
+
+
+@router.patch("/boards/events/{mark_id}")
+def update_board_event_mark(
+    mark_id: int,
+    payload: BoardEventMarkUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    row = db.query(BoardEventMark).filter(BoardEventMark.id == mark_id).first()
+    if not row:
+        raise HTTPException(404, "事件标注不存在")
+    if payload.date is not None:
+        date_str = payload.date.strip()[:10]
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "date 格式必须是 YYYY-MM-DD")
+        row.date = date_str
+    if payload.event_type is not None:
+        if payload.event_type not in EVENT_TYPES:
+            raise HTTPException(400, f"event_type 必须是 {'/'.join(EVENT_TYPES)} 之一")
+        row.event_type = payload.event_type
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(400, "title 不能为空")
+        row.title = title
+    if payload.summary is not None:
+        row.summary = payload.summary.strip() or None
+    if payload.importance is not None:
+        row.importance = int(payload.importance)
+    db.commit()
+    db.refresh(row)
+    return _event_mark_to_dict(row)
+
+
+@router.delete("/boards/events/{mark_id}")
+def delete_board_event_mark(mark_id: int, db: Session = Depends(get_db)):
+    row = db.query(BoardEventMark).filter(BoardEventMark.id == mark_id).first()
+    if not row:
+        raise HTTPException(404, "事件标注不存在")
     db.delete(row)
     db.commit()
     return {"ok": True}
@@ -1249,7 +1616,8 @@ async def refresh_watched_boards(payload: BoardRefreshRequest, db: Session = Dep
 async def get_board_kline(
     board_code: str,
     market: str = Query("CN"),
-    days: int = Query(DEFAULT_BOARD_DAYS, ge=30, le=250),
+    days: int = Query(DEFAULT_BOARD_DAYS, ge=30, le=MAX_BOARD_DAYS),
+    interval: str = Query("1d", pattern="^(1d|1w)$"),
     db: Session = Depends(get_db),
 ):
     market = (market or "CN").strip().upper()
@@ -1257,12 +1625,15 @@ async def get_board_kline(
     if market != "CN":
         raise HTTPException(400, "v1 仅支持 A 股行业板块")
     rows = await _ensure_board_klines(db, market, code, days)
+    klines = _serialize_kline_rows(rows)
+    if interval == "1w":
+        klines = _aggregate_weekly(klines)
     return {
         "symbol": code,
         "market": market,
         "days": days,
-        "interval": "1d",
-        "klines": _serialize_kline_rows(rows),
+        "interval": interval,
+        "klines": klines,
     }
 
 
@@ -1270,7 +1641,7 @@ async def get_board_kline(
 async def get_board_signals(
     board_code: str,
     market: str = Query("CN"),
-    days: int = Query(DEFAULT_BOARD_DAYS, ge=30, le=250),
+    days: int = Query(DEFAULT_BOARD_DAYS, ge=30, le=MAX_BOARD_DAYS),
     db: Session = Depends(get_db),
 ):
     market = (market or "CN").strip().upper()
