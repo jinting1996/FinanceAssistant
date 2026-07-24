@@ -6,7 +6,9 @@ import {
   type BoardEventType,
   type BoardPoolResponse,
   type BoardSignalSummary,
+  type BoardValuationDetail,
   type PoolBoardItem,
+  type ValuationLabel,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -45,6 +47,23 @@ function formatPct(pct: number | null | undefined) {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`
 }
 
+const VALUATION_STYLE: Record<ValuationLabel, { text: string; cls: string }> = {
+  low: { text: '低估', cls: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' },
+  fair: { text: '合理', cls: 'bg-accent/60 text-muted-foreground' },
+  high: { text: '高估', cls: 'bg-rose-500/12 text-rose-600 dark:text-rose-400' },
+  unknown: { text: '估值—', cls: 'bg-accent/40 text-muted-foreground' },
+}
+
+/** 估值分位徽章文案:优先3年,回落到5年;分位缺失时只显示标签。 */
+function valuationBadge(v: BoardValuationDetail | null) {
+  if (!v || !v.available) return null
+  const label = (v.label || 'unknown') as ValuationLabel
+  const pct = v.pe_percentile?.['3y'] ?? v.pe_percentile?.['5y'] ?? null
+  const style = VALUATION_STYLE[label] || VALUATION_STYLE.unknown
+  const pctText = pct == null ? '' : `PE分位 ${pct.toFixed(0)}% · `
+  return { text: `${pctText}${style.text}`, cls: style.cls }
+}
+
 export default function SectorPoolPage() {
   const { toast } = useToast()
   const [pool, setPool] = useState<BoardPoolResponse | null>(null)
@@ -53,6 +72,7 @@ export default function SectorPoolPage() {
   const [selectedCode, setSelectedCode] = useState('')
   const [period, setPeriod] = useState<PeriodKey>('120d')
   const [signal, setSignal] = useState<BoardSignalSummary | null>(null)
+  const [valuation, setValuation] = useState<BoardValuationDetail | null>(null)
   const [events, setEvents] = useState<BoardEventMarkItem[]>([])
   const [focusDate, setFocusDate] = useState<string | null>(null)
   const [highlightId, setHighlightId] = useState<number | null>(null)
@@ -95,6 +115,7 @@ export default function SectorPoolPage() {
 
   const loadDetail = async (code: string) => {
     setSignal(null)
+    setValuation(null)
     setEvents([])
     setFocusDate(null)
     setHighlightId(null)
@@ -107,6 +128,12 @@ export default function SectorPoolPage() {
       setEvents(evs)
     } catch {
       // 信号/事件加载失败不阻塞K线展示
+    }
+    // 估值单独拉取,不阻塞也不影响信号/事件
+    try {
+      setValuation(await marketEventsApi.boardValuation(code))
+    } catch {
+      setValuation(null)
     }
   }
 
@@ -220,6 +247,11 @@ export default function SectorPoolPage() {
       >
         <span className="flex items-center gap-1 min-w-0">
           {board.tier === 'pinned' ? <Pin className="w-3 h-3 shrink-0 text-amber-500" /> : null}
+          {board.valuation?.label === 'low' ? (
+            <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-emerald-500" title="估值偏低" />
+          ) : board.valuation?.label === 'high' ? (
+            <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-rose-500" title="估值偏高" />
+          ) : null}
           <span className="truncate">{board.board_name}</span>
           {board.scope === 'concept' ? (
             <span className="shrink-0 rounded bg-violet-500/10 px-1 text-[10px] text-violet-500">概念</span>
@@ -302,6 +334,24 @@ export default function SectorPoolPage() {
                 ) : (
                   <span className="rounded bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-500">行业板块</span>
                 )}
+                {(() => {
+                  const badge = valuationBadge(valuation)
+                  if (!badge) return null
+                  const pb = valuation?.pb_percentile?.['3y'] ?? valuation?.pb_percentile?.['5y'] ?? null
+                  const title = valuation?.available
+                    ? `PE ${valuation.pe?.toFixed(1)}${pb != null ? ` · PB分位 ${pb.toFixed(0)}%` : ''} · 基于${valuation.history_days ?? 0}个交易日`
+                    : ''
+                  return (
+                    <span className={`rounded px-2 py-0.5 text-[11px] ${badge.cls}`} title={title}>
+                      {badge.text}
+                    </span>
+                  )
+                })()}
+                {selected.scope === 'industry' && valuation && !valuation.available ? (
+                  <span className="rounded bg-accent/40 px-2 py-0.5 text-[11px] text-muted-foreground" title={valuation.reason || ''}>
+                    估值待回填
+                  </span>
+                ) : null}
                 {(selected.tags || []).map(tag => (
                   <span key={tag} className="rounded bg-accent/60 px-2 py-0.5 text-[11px] text-muted-foreground">
                     {tag}

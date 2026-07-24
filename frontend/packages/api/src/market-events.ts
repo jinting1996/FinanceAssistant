@@ -115,10 +115,36 @@ export interface WatchedBoardItem {
   updated_at: string | null
 }
 
+export type ValuationLabel = 'low' | 'fair' | 'high' | 'unknown'
+
+export interface BoardValuationCompact {
+  pe: number
+  pe_percentile_3y: number | null
+  label: ValuationLabel
+  history_days: number
+}
+
+export interface BoardValuationDetail {
+  board_code: string
+  available: boolean
+  reason?: string
+  sw_code?: string
+  sw_name?: string
+  date?: string
+  pe?: number | null
+  pb?: number | null
+  dividend_yield?: number | null
+  history_days?: number
+  pe_percentile?: { '3y': number | null; '5y': number | null }
+  pb_percentile?: { '3y': number | null; '5y': number | null }
+  label?: ValuationLabel
+}
+
 export interface PoolBoardItem extends WatchedBoardItem {
   change_pct: number | null
   turnover: number | null
   leader_name?: string | null
+  valuation?: BoardValuationCompact | null
 }
 
 export interface BoardPoolResponse {
@@ -302,6 +328,18 @@ export const marketEventsApi = {
       method: 'POST',
       timeoutMs: 60000,
     }),
+
+  boardValuation: (boardCode: string, market: 'CN' = 'CN') =>
+    fetchAPI<BoardValuationDetail>(
+      withQuery(`/market-events/boards/${encodeURIComponent(boardCode)}/valuation`, { market }),
+      { timeoutMs: 30000 }
+    ),
+
+  valuationStatus: () =>
+    fetchAPI<{ rows: number; industries: number; min_date: string | null; max_date: string | null }>(
+      '/market-events/boards/valuation/status',
+      { timeoutMs: 30000 }
+    ),
 
   addPoolBoard: (payload: {
     market?: 'CN'

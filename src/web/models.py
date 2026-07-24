@@ -382,6 +382,30 @@ class BoardEventMark(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class SectorValuationDaily(Base):
+    """申万一级行业日频估值快照,用于计算板块 PE/PB 历史分位。
+
+    sw_code 为申万一级行业代码(如 801080),与腾讯行业板块码 pt01<sw_code> 一一对应。
+    """
+
+    __tablename__ = "sector_valuation_daily"
+    __table_args__ = (
+        UniqueConstraint("sw_code", "date", name="uq_sector_valuation_code_date"),
+        Index("ix_sector_valuation_code_date", "sw_code", "date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sw_code = Column(String, nullable=False)   # 申万一级行业代码,如 801080
+    sw_name = Column(String, nullable=False, default="")
+    date = Column(String, nullable=False)      # YYYY-MM-DD
+    pe = Column(Float, nullable=True)          # 市盈率(申万整体法)
+    pb = Column(Float, nullable=True)          # 市净率
+    dividend_yield = Column(Float, nullable=True)  # 股息率 %
+    turnover_rate = Column(Float, nullable=True)   # 换手率 %
+    close_index = Column(Float, nullable=True)     # 收盘指数
+    fetched_at = Column(DateTime, server_default=func.now())
+
+
 class BoardKlineCache(Base):
     """Daily kline cache for board indexes."""
 

@@ -29,6 +29,7 @@ from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.context_scheduler import ContextMaintenanceScheduler
 from src.core.t_monitor_scheduler import TMonitorScheduler
 from src.core.breakout_validity_scheduler import BreakoutValidityScheduler
+from src.core.sector_valuation_scheduler import SectorValuationScheduler
 from src.core.agent_runs import record_agent_run
 from src.core.log_context import install_log_record_factory, log_context
 from src.core.agent_catalog import (
@@ -53,6 +54,7 @@ paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 t_monitor_scheduler: TMonitorScheduler | None = None
 breakout_validity_scheduler: BreakoutValidityScheduler | None = None
+sector_valuation_scheduler: SectorValuationScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1288,7 +1290,7 @@ async def lifespan(app):
 
     threading.Thread(target=refresh_stock_cache, daemon=True).start()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, t_monitor_scheduler, breakout_validity_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, t_monitor_scheduler, breakout_validity_scheduler, sector_valuation_scheduler
     scheduler = build_scheduler()
     scheduler.start()
     logger.info("Agent 调度器已启动")
@@ -1319,6 +1321,13 @@ async def lifespan(app):
         logger.info("突破有效性扫描调度器已启动(每交易日15:20)")
     except Exception as e:
         logger.error(f"突破有效性扫描调度器启动失败: {e}")
+    try:
+        settings = Settings()
+        sector_valuation_scheduler = SectorValuationScheduler(timezone=settings.app_timezone)
+        sector_valuation_scheduler.start()
+        logger.info("板块估值调度器已启动(每交易日15:40,冷启动自动回填)")
+    except Exception as e:
+        logger.error(f"板块估值调度器启动失败: {e}")
     try:
         settings = Settings()
         paper_trading_scheduler = PaperTradingScheduler(
@@ -1354,6 +1363,9 @@ async def lifespan(app):
     if breakout_validity_scheduler:
         breakout_validity_scheduler.shutdown()
         logger.info("突破有效性扫描调度器已关闭")
+    if sector_valuation_scheduler:
+        sector_valuation_scheduler.shutdown()
+        logger.info("板块估值调度器已关闭")
     if paper_trading_scheduler:
         paper_trading_scheduler.shutdown()
         logger.info("模拟盘调度器已关闭")

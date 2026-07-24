@@ -28,7 +28,12 @@ from src.core.sector_pool import (
     fetch_all_boards,
     seed_sector_pool,
 )
-from src.web.models import BoardEventMark, BoardKlineCache, Stock, WatchedBoard
+from src.core.sector_valuation import (
+    compute_valuation,
+    compute_valuation_map,
+    tencent_code_to_sw,
+)
+from src.web.models import BoardEventMark, BoardKlineCache, SectorValuationDaily, Stock, WatchedBoard
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1364,6 +1369,14 @@ async def get_board_pool(
             live_boards = []
     quote_by_code = {str(b.get("code") or ""): b for b in live_boards}
 
+    # 批量估值分位:行业板块 -> 申万码,一次性算 PE 分位
+    sw_by_board = {
+        row.board_code: sw
+        for row in rows
+        if (sw := tencent_code_to_sw(row.board_code, row.scope or "industry"))
+    }
+    val_map = compute_valuation_map(db, list(sw_by_board.values()))
+
     categories = []
     for key, label in SECTOR_CATEGORIES:
         boards = []
@@ -1375,6 +1388,8 @@ async def get_board_pool(
             item["change_pct"] = quote.get("change_pct")
             item["turnover"] = quote.get("turnover")
             item["leader_name"] = quote.get("leader_name")
+            sw = sw_by_board.get(row.board_code)
+            item["valuation"] = val_map.get(sw) if sw else None
             boards.append(item)
         if boards:
             categories.append({"key": key, "label": label, "boards": boards})
@@ -1395,6 +1410,66 @@ async def reseed_board_pool(db: Session = Depends(get_db)):
         raise HTTPException(502, "板块名单拉取失败,请稍后重试")
     report = seed_sector_pool(db, boards)
     return report
+
+
+@router.get("/boards/{board_code}/valuation")
+def get_board_valuation(
+    board_code: str,
+    market: str = Query("CN"),
+    db: Session = Depends(get_db),
+):
+    """板块 PE/PB 估值 + 历史分位(3年/5年)。仅行业板块可算,概念板块返回 available=False。"""
+    code = (board_code or "").strip()
+    row = (
+        db.query(WatchedBoard)
+        .filter(WatchedBoard.market == market, WatchedBoard.board_code == code)
+        .first()
+    )
+    scope = (row.scope if row else "industry") or "industry"
+    sw = tencent_code_to_sw(code, scope)
+    if not sw:
+        return {"board_code": code, "available": False, "reason": "非行业板块,无申万估值口径"}
+    val = compute_valuation(db, sw)
+    if not val:
+        return {"board_code": code, "available": False, "reason": "估值历史为空,请先回填"}
+    from src.core.sector_valuation import valuation_label
+
+    return {
+        "board_code": code,
+        "available": True,
+        "sw_code": sw,
+        **val,
+        "label": valuation_label(val["pe_percentile"].get("3y")),
+    }
+
+
+class ValuationBackfillRequest(BaseModel):
+    start_year: int = Field(default=2021, ge=2005, le=2100)
+    end_year: int | None = None
+
+
+@router.post("/boards/valuation/backfill")
+def backfill_board_valuation(payload: ValuationBackfillRequest, db: Session = Depends(get_db)):
+    """回填申万一级行业估值历史(逐年拉取,可能耗时数分钟——建议后台或低频调用)。"""
+    from src.core.sector_valuation import backfill_years
+
+    report = backfill_years(db, start_year=payload.start_year, end_year=payload.end_year)
+    return report
+
+
+@router.get("/boards/valuation/status")
+def board_valuation_status(db: Session = Depends(get_db)):
+    """估值库覆盖情况:行业数、日期范围、总行数。用于前端判断是否需要回填。"""
+    total = db.query(func.count(SectorValuationDaily.id)).scalar() or 0
+    codes = db.query(func.count(func.distinct(SectorValuationDaily.sw_code))).scalar() or 0
+    min_date = db.query(func.min(SectorValuationDaily.date)).scalar()
+    max_date = db.query(func.max(SectorValuationDaily.date)).scalar()
+    return {
+        "rows": int(total),
+        "industries": int(codes),
+        "min_date": min_date,
+        "max_date": max_date,
+    }
 
 
 @router.post("/boards/pool")
